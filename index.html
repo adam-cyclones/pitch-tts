@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Piper TTS WASM Test</title>
+    <script type="module">
+        // It's important to use the ES module version for browser environments
+        // The library handles its own WASM loading and model downloading.
+        // We'll rely on it fetching from its default CDN locations.
+        import * as tts from 'https://cdn.jsdelivr.net/npm/@mintplex-labs/piper-tts-web@1.0.4/build/piper-tts-web.mjs';
+
+        // Store the synthesized audio data URL here
+        window.audioDataURL = null;
+        window.synthesisError = null;
+        window.synthesisComplete = false;
+
+        // Default voice
+        const DEFAULT_VOICE_ID = 'en_US-hfc_female-medium'; // A common voice, adjust if needed
+
+        async function initializeAndDownloadVoice(voiceID = DEFAULT_VOICE_ID) {
+            try {
+                console.log(`Initializing TTS and downloading voice: ${voiceID}`);
+                await tts.download(voiceID, (progress) => {
+                    console.log(`Downloading ${progress.url} - ${Math.round(progress.loaded * 100 / progress.total)}%`);
+                });
+                console.log(`Voice ${voiceID} downloaded and ready.`);
+                return true;
+            } catch (error) {
+                console.error('Error initializing/downloading voice:', error);
+                window.synthesisError = `Error initializing/downloading voice: ${error.message}`;
+                return false;
+            }
+        }
+
+        async function synthesizeSpeech(text, voiceID = DEFAULT_VOICE_ID) {
+            window.synthesisComplete = false;
+            window.audioDataURL = null;
+            window.synthesisError = null;
+            console.log(`Attempting to synthesize: "${text}" with voice ${voiceID}`);
+
+            try {
+                // Ensure the voice is downloaded (the library might handle this, but explicit download is safer)
+                const storedVoices = await tts.stored();
+                if (!storedVoices.includes(voiceID)) {
+                    console.log(`Voice ${voiceID} not found in cache, attempting download...`);
+                    const initialized = await initializeAndDownloadVoice(voiceID);
+                    if (!initialized) {
+                        // Error already set by initializeAndDownloadVoice
+                        window.synthesisComplete = true;
+                        return;
+                    }
+                } else {
+                    console.log(`Voice ${voiceID} found in cache.`);
+                }
+
+                const wav = await tts.predict({
+                    text: text,
+                    voiceId: voiceID,
+                }, (progress) => {
+                     console.log(`Synthesis progress for "${text}": ${JSON.stringify(progress)}`);
+                });
+
+                console.log('Synthesis complete, WAV object:', wav);
+
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                    window.audioDataURL = reader.result;
+                    console.log('Audio data URL created:', window.audioDataURL.substring(0, 100) + '...'); // Log a snippet
+                    window.synthesisComplete = true;
+                };
+                reader.onerror = (error) => {
+                    console.error('FileReader error:', error);
+                    window.synthesisError = `FileReader error: ${error.message}`;
+                    window.synthesisComplete = true;
+                };
+                reader.readAsDataURL(wav);
+
+            } catch (error) {
+                console.error('Error during speech synthesis:', error);
+                window.synthesisError = `Synthesis error: ${error.message}`;
+                window.synthesisComplete = true;
+            }
+        }
+
+        // Expose functions to be called by Puppeteer
+        window.piperTTS = {
+            initializeAndDownloadVoice,
+            synthesizeSpeech
+        };
+
+        // For testing in browser:
+        // setTimeout(async () => {
+        //     console.log("Available voices:", await tts.voices());
+        //     const ready = await window.piperTTS.initializeAndDownloadVoice();
+        //     if (ready) {
+        //         await window.piperTTS.synthesizeSpeech("Hello from the browser!");
+        //         // You can then check window.audioDataURL in the console
+        //         // and play it: const audio = new Audio(window.audioDataURL); audio.play();
+        //     }
+        // }, 1000);
+
+    </script>
+</head>
+<body>
+    <h1>Piper TTS WASM Test Page</h1>
+    <p>This page is used by Puppeteer to generate speech.</p>
+    <p>Check the console for logs.</p>
+</body>
+</html>
