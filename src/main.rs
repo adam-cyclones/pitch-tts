@@ -1,6 +1,59 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use std::str::FromStr;
 use pitch_tts::{get_voices_by_language, synth_with_voice_config, synth_to_wav_with_pitch, initialize_default_voice};
 use rodio::buffer::SamplesBuffer;
+
+/// Pitch preset or custom value
+#[derive(Clone, Debug)]
+pub enum PitchArg {
+    Value(f32),
+    Preset(PitchPreset),
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+pub enum PitchPreset {
+    Slomo,
+    Deep,
+    Child,
+    Helium,
+}
+
+impl PitchPreset {
+    pub fn factor(&self) -> f32 {
+        match self {
+            PitchPreset::Slomo => 0.4,
+            PitchPreset::Deep => 0.85,
+            PitchPreset::Child => 1.1,
+            PitchPreset::Helium => 1.5,
+        }
+    }
+}
+
+impl FromStr for PitchArg {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(val) = s.parse::<f32>() {
+            Ok(PitchArg::Value(val))
+        } else {
+            match s.to_lowercase().as_str() {
+                "slomo" => Ok(PitchArg::Preset(PitchPreset::Slomo)),
+                "deep" => Ok(PitchArg::Preset(PitchPreset::Deep)),
+                "child" => Ok(PitchArg::Preset(PitchPreset::Child)),
+                "helium" => Ok(PitchArg::Preset(PitchPreset::Helium)),
+                _ => Err(format!("Invalid pitch value or preset: {}", s)),
+            }
+        }
+    }
+}
+
+impl PitchArg {
+    pub fn as_factor(&self) -> f32 {
+        match self {
+            PitchArg::Value(v) => *v,
+            PitchArg::Preset(p) => p.factor(),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "pitch-tts")]
@@ -18,6 +71,10 @@ struct Cli {
     /// Text to synthesize
     #[arg(short, long)]
     text: Option<String>,
+    
+    /// Pitch factor or preset (e.g. 1.2, slomo, deep, child, helium)
+    #[arg(long, value_parser = PitchArg::from_str, help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
+    pitch: Option<PitchArg>,
 }
 
 #[derive(Subcommand)]
@@ -39,9 +96,9 @@ enum Commands {
         #[arg(short, long, default_value = "en_GB-alba-medium")]
         voice: String,
         
-        /// Pitch factor (0.5 = octave down, 2.0 = octave up)
-        #[arg(short, long, default_value = "1.0")]
-        pitch: f32,
+        /// Pitch factor or preset (e.g. 1.2, slomo, deep, child, helium)
+        #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
+        pitch: PitchArg,
     },
     
     /// Export speech to WAV file
@@ -58,9 +115,9 @@ enum Commands {
         #[arg(short, long)]
         text: String,
         
-        /// Pitch factor (0.5 = octave down, 2.0 = octave up)
-        #[arg(short, long, default_value = "1.0")]
-        pitch: f32,
+        /// Pitch factor or preset (e.g. 1.2, slomo, deep, child, helium)
+        #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
+        pitch: PitchArg,
     },
 }
 
@@ -94,10 +151,11 @@ fn main() {
         }
         
         Some(Commands::Say { voice, text, pitch }) => {
-            println!("Playing voice: {} (pitch: {})", voice, pitch);
+            let pitch_factor = pitch.as_factor();
+            println!("Playing voice: {} (pitch: {})", voice, pitch_factor);
             match synth_with_voice_config(text.clone(), voice) {
                 Ok(samples) => {
-                    let processed_samples = pitch_tts::pitch_shift(&samples, *pitch);
+                    let processed_samples = pitch_tts::pitch_shift(&samples, pitch_factor);
                     let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
                     let sink = rodio::Sink::try_new(&handle).unwrap();
                     let buf = SamplesBuffer::new(1, 22050, processed_samples);
@@ -109,8 +167,9 @@ fn main() {
         }
         
         Some(Commands::Export { voice, output, text, pitch }) => {
-            println!("Exporting voice: {} to {}", voice, output);
-            match synth_to_wav_with_pitch(text.clone(), voice, output, *pitch) {
+            let pitch_factor = pitch.as_factor();
+            println!("Exporting voice: {} to {} (pitch: {})", voice, output, pitch_factor);
+            match synth_to_wav_with_pitch(text.clone(), voice, output, pitch_factor) {
                 Ok(_) => println!("Successfully exported to {}", output),
                 Err(e) => eprintln!("Error: {}", e),
             }
@@ -124,6 +183,7 @@ fn main() {
                 let text = cli.text.unwrap_or_else(|| "Hello! I'm playing audio from memory directly with piper-rs.".to_string());
                 
                 println!("Using voice: {}", voice_id);
+                let pitch_factor = cli.pitch.as_ref().map(|p| p.as_factor()).unwrap_or(1.0);
                 match synth_with_voice_config(text, &voice_id) {
                     Ok(samples) => {
                         let (_stream, handle) = rodio::OutputStream::try_default().unwrap();

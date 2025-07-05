@@ -58,6 +58,12 @@ cargo run -- say "Bonjour!" --voice fr_FR-gilles-low
 # With pitch shifting (1.5x = higher pitch)
 cargo run -- say "High pitched voice" --pitch 1.5
 
+# With pitch preset (helium, child, deep, slomo)
+cargo run -- say "Helium voice!" --pitch helium
+cargo run -- say "Child voice!" --pitch child
+cargo run -- say "Deep voice!" --pitch deep
+cargo run -- say "Slow motion!" --pitch slomo
+
 # Combine all options
 cargo run -- say "Custom message" --voice en_US-amy-medium --pitch 0.8
 ```
@@ -180,6 +186,11 @@ models/
 - **Range**: 0.5x to 2.0x (octave down to octave up)
 - **Default**: 1.0x (no change)
 - **Algorithm**: Linear interpolation resampling
+- **Presets**:
+  - `slomo`: 0.7 (slow motion)
+  - `deep`: 0.85 (deeper voice)
+  - `child`: 1.1 (child-like voice)
+  - `helium`: 1.5 (chipmunk/helium effect)
 
 ## 🛣️ Roadmap
 
