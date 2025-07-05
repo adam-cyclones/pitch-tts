@@ -12,9 +12,7 @@ path = "src/main.rs"
 name = "pitch_tts"
 path = "src/lib.rs"
 
-[[example]]
-name = "basic_usage"
-path = "examples/basic_usage.rs"
+
 
 [dependencies]
 piper-rs = "0.1.9"
