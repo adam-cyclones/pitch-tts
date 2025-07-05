@@ -49,6 +49,23 @@ cargo run -- --voice en_US-libritts_r-medium --text "Quick mode!"
 
 You can use `pitch_tts` as a Rust library for custom TTS workflows or Blender integration.
 
+## Testing
+
+Run the test suite:
+
+```sh
+# Run all tests (configured for single-threaded execution to prevent audio conflicts)
+cargo test
+
+# Run specific test file
+cargo test --test cli_tests
+
+# Run specific test
+cargo test test_cli_say_output_validation
+```
+
+**Note:** Tests are configured to run single-threaded in `Cargo.toml` to prevent audio conflicts when multiple CLI tests play audio simultaneously.
+
 ## Roadmap
 - [ ] Rhubarb lip sync/phoneme extraction for animation
 - [ ] More advanced pitch/timbre controls
