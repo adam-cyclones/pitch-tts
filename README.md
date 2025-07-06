@@ -11,12 +11,38 @@ A fast, flexible text-to-speech (TTS) CLI and Rust library powered by [piper-rs]
 - **🌍 Multi-language Support** - English (US/UK), German, French, Spanish, Italian, and Russian voices
 - **⚡ Fast Synthesis** - Built on piper-rs for efficient, high-quality speech generation
 - **📚 Rust Library** - Use as a library for custom TTS workflows and Blender integration
+- **🎬 Lip-sync Support** - Extract phonemes and generate lip-sync data for animation (optional feature)
 
 ## 🚀 Installation
 
 ### Prerequisites
 - Rust 1.70+ and Cargo
 - Internet connection (for downloading voice models)
+- **For lip-sync features**: Rhubarb Lip Sync executable
+
+### Install Rhubarb (for lip-sync features)
+Rhubarb is a separate C++ application that needs to be installed separately:
+
+**macOS:**
+```bash
+brew install rhubarb-lip-sync
+```
+
+**Linux:**
+```bash
+# Download from https://github.com/DanielSWolf/rhubarb-lip-sync/releases
+# Or build from source
+git clone https://github.com/DanielSWolf/rhubarb-lip-sync.git
+cd rhubarb-lip-sync
+mkdir build && cd build
+cmake ..
+make
+sudo make install
+```
+
+**Windows:**
+- Download the latest release from https://github.com/DanielSWolf/rhubarb-lip-sync/releases
+- Extract and add to your PATH
 
 ### Build from Source
 ```bash
@@ -24,8 +50,11 @@ A fast, flexible text-to-speech (TTS) CLI and Rust library powered by [piper-rs]
 git clone https://github.com/yourusername/pitch-tts.git
 cd pitch-tts
 
-# Build the release version
+# Build the release version (basic features)
 cargo build --release
+
+# Build with lip-sync support
+cargo build --release --features lip-sync
 
 # The binary will be available at target/release/pitch-tts
 ```
@@ -80,6 +109,33 @@ cargo run -- export --voice en_US-libritts_r-medium --output high_pitch.wav --te
 cargo run -- export --voice en_GB-alan-medium --output character_speech.wav --text "Character dialogue here" --pitch 1.0
 ```
 
+### Lip-sync Features (requires --features lip-sync and Rhubarb installation)
+```bash
+# Check if lip-sync is available
+cargo run --features lip-sync -- --help
+
+# Extract phonemes from existing audio file
+cargo run --features lip-sync -- phonemes --input speech.wav --output phonemes.json
+
+# Generate WAV + lip-sync data in one command
+cargo run --features lip-sync -- lipsync \
+  --voice en_GB-alba-medium \
+  --text "Hello, this is a test for lip-sync animation!" \
+  --wav-output character_speech.wav \
+  --lipsync-output character_lipsync.json \
+  --pitch 1.0
+
+# Generate lip-sync with pitch presets
+cargo run --features lip-sync -- lipsync \
+  --voice en_US-amy-medium \
+  --text "Child voice for animation" \
+  --wav-output child_speech.wav \
+  --lipsync-output child_lipsync.json \
+  --pitch child
+```
+
+**Note**: Lip-sync features require both the `--features lip-sync` flag and the Rhubarb executable to be installed and accessible in your PATH.
+
 ### Legacy Mode (Quick Commands)
 ```bash
 # Direct voice and text specification (legacy behavior)
@@ -126,6 +182,32 @@ synth_to_wav_with_pitch(
 )?;
 ```
 
+### Lip-sync Library Usage (requires --features lip-sync and Rhubarb installation)
+```rust
+use pitch_tts::{synth_with_lip_sync, extract_phonemes_from_audio, extract_phonemes_from_text};
+
+// Check if lip-sync is available
+if pitch_tts::has_lip_sync() {
+    // Generate WAV + lip-sync data
+    synth_with_lip_sync(
+        "Hello, this is for animation!".to_string(),
+        "en_GB-alba-medium",
+        "speech.wav",
+        "lipsync.json",
+        1.0
+    )?;
+
+    // Extract phonemes from existing audio
+    let lip_sync_data = extract_phonemes_from_audio("speech.wav")?;
+    println!("Duration: {:.2}s, Phonemes: {}", lip_sync_data.duration, lip_sync_data.phonemes.len());
+
+    // Extract phonemes from text (synthesizes audio first)
+    let lip_sync_data = extract_phonemes_from_text("Hello world!", "en_US-amy-medium")?;
+} else {
+    println!("Lip-sync not available. Install Rhubarb and build with --features lip-sync");
+}
+```
+
 ## 🧪 Testing
 
 Run the comprehensive test suite:
@@ -170,6 +252,12 @@ cargo test -- --test-threads=1
 - Generate character dialogue for 3D animations
 - Create voice tracks for video projects
 
+### Animation & Lip-sync
+- Generate phoneme data for character animation
+- Create synchronized audio and lip-sync files
+- Produce animation-ready voice content
+- Support for game character dialogue systems
+
 ## 🔧 Configuration
 
 ### Voice Model Storage
@@ -187,19 +275,43 @@ models/
 - **Default**: 1.0x (no change)
 - **Algorithm**: Linear interpolation resampling
 - **Presets**:
-  - `slomo`: 0.7 (slow motion)
+  - `slomo`: 0.4 (slow motion)
   - `deep`: 0.85 (deeper voice)
   - `child`: 1.1 (child-like voice)
   - `helium`: 1.5 (chipmunk/helium effect)
 
+### Lip-sync Data Format
+When using lip-sync features, phoneme data is exported as JSON:
+```json
+{
+  "phonemes": [
+    {
+      "phoneme": "A",
+      "start_time": 0.0,
+      "end_time": 0.1
+    },
+    {
+      "phoneme": "B",
+      "start_time": 0.1,
+      "end_time": 0.2
+    }
+  ],
+  "duration": 2.5,
+  "sample_rate": 22050
+}
+```
+
+**Phoneme Types**: A, B, C, D, E, F, G, H, X (closed mouth)
+
 ## 🛣️ Roadmap
 
-- [ ] **Rhubarb Lip Sync Integration** - Phoneme extraction for animation
+- [x] **Rhubarb Lip Sync Integration** - Phoneme extraction for animation ✅
 - [ ] **Advanced Audio Controls** - Tempo, timbre, and emotion modification
 - [ ] **Voice Quality Auto-detection** - Automatic model quality selection
 - [ ] **Batch Processing** - Process multiple text files at once
 - [ ] **Streaming Support** - Real-time streaming audio output
 - [ ] **Custom Voice Training** - Support for custom voice models
+- [ ] **Multi-language Lip-sync** - Support for non-English phoneme extraction
 
 ## 🤝 Contributing
 

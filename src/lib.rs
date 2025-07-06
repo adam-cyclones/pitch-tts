@@ -3,6 +3,9 @@ use std::fs;
 use std::process::Command;
 use std::path::Path;
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+
+
 
 #[derive(Debug, Clone)]
 pub struct Voice {
@@ -12,6 +15,33 @@ pub struct Voice {
     pub quality: String,
     pub model_path: String,
     pub config_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Phoneme {
+    pub phoneme: String,
+    pub start_time: f32,
+    pub end_time: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LipSyncData {
+    pub phonemes: Vec<Phoneme>,
+    pub duration: f32,
+    pub sample_rate: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RhubarbOutput {
+    mouth_cues: Vec<RhubarbMouthCue>,
+    duration: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct RhubarbMouthCue {
+    value: String,
+    start: f32,
+    end: f32,
 }
 
 const HF_BASE: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
@@ -276,4 +306,128 @@ pub fn initialize_default_voice() -> Result<(), Box<dyn std::error::Error>> {
         println!("Alba voice downloaded successfully!");
     }
     Ok(())
+} 
+
+/// Check if Rhubarb lip-sync is available
+pub fn has_lip_sync() -> bool {
+    cfg!(feature = "lip-sync") && check_rhubarb_installed()
+}
+
+/// Check if Rhubarb executable is installed and accessible
+fn check_rhubarb_installed() -> bool {
+    Command::new("rhubarb")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+/// Extract phonemes from audio file using Rhubarb executable
+#[cfg(feature = "lip-sync")]
+pub fn extract_phonemes_from_audio(audio_path: &str) -> Result<LipSyncData, Box<dyn std::error::Error>> {
+    if !check_rhubarb_installed() {
+        return Err("Rhubarb not found. Please install Rhubarb from https://github.com/DanielSWolf/rhubarb-lip-sync".into());
+    }
+    
+    // Run Rhubarb to extract phonemes
+    let output = Command::new("rhubarb")
+        .arg("-f")
+        .arg("json")
+        .arg("-o")
+        .arg("temp_rhubarb_output.json")
+        .arg(audio_path)
+        .output()?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Rhubarb failed: {}", stderr).into());
+    }
+    
+    // Read the JSON output
+    let json_content = fs::read_to_string("temp_rhubarb_output.json")?;
+    let rhubarb_output: RhubarbOutput = serde_json::from_str(&json_content)?;
+    
+    // Clean up temporary file
+    let _ = fs::remove_file("temp_rhubarb_output.json");
+    
+    // Convert to our format
+    let mut phonemes = Vec::new();
+    for mouth_cue in rhubarb_output.mouth_cues {
+        phonemes.push(Phoneme {
+            phoneme: mouth_cue.value,
+            start_time: mouth_cue.start,
+            end_time: mouth_cue.end,
+        });
+    }
+    
+    Ok(LipSyncData {
+        phonemes,
+        duration: rhubarb_output.duration,
+        sample_rate: 22050, // Standard sample rate for our TTS
+    })
+}
+
+/// Extract phonemes from text using Rhubarb (requires audio synthesis first)
+#[cfg(feature = "lip-sync")]
+pub fn extract_phonemes_from_text(text: &str, voice_id: &str) -> Result<LipSyncData, Box<dyn std::error::Error>> {
+    // First synthesize the audio
+    let samples = synth_with_voice_config(text.to_string(), voice_id)?;
+    
+    // Save to temporary WAV file
+    let temp_wav = "temp_phoneme_extraction.wav";
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 22050,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    
+    let mut writer = hound::WavWriter::create(temp_wav, spec)?;
+    for sample in samples {
+        let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+        writer.write_sample(sample_i16)?;
+    }
+    writer.finalize()?;
+    
+    // Extract phonemes from the temporary file
+    let result = extract_phonemes_from_audio(temp_wav)?;
+    
+    // Clean up temporary file
+    let _ = fs::remove_file(temp_wav);
+    
+    Ok(result)
+}
+
+/// Generate lip-sync data with WAV export
+#[cfg(feature = "lip-sync")]
+pub fn synth_with_lip_sync(text: String, voice_id: &str, wav_output: &str, lip_sync_output: &str, pitch_factor: f32) -> Result<(), Box<dyn std::error::Error>> {
+    // Generate WAV with pitch shifting
+    synth_to_wav_with_pitch(text.clone(), voice_id, wav_output, pitch_factor)?;
+    
+    // Extract phonemes from the generated WAV
+    let lip_sync_data = extract_phonemes_from_audio(wav_output)?;
+    
+    // Save lip-sync data to JSON
+    let lip_sync_json = serde_json::to_string_pretty(&lip_sync_data)?;
+    fs::write(lip_sync_output, lip_sync_json)?;
+    
+    println!("Generated WAV: {}", wav_output);
+    println!("Generated lip-sync data: {}", lip_sync_output);
+    println!("Duration: {:.2}s, Phonemes: {}", lip_sync_data.duration, lip_sync_data.phonemes.len());
+    
+    Ok(())
+}
+
+#[cfg(not(feature = "lip-sync"))]
+pub fn extract_phonemes_from_audio(_audio_path: &str) -> Result<LipSyncData, Box<dyn std::error::Error>> {
+    Err("Lip-sync feature not enabled. Build with --features lip-sync".into())
+}
+
+#[cfg(not(feature = "lip-sync"))]
+pub fn extract_phonemes_from_text(_text: &str, _voice_id: &str) -> Result<LipSyncData, Box<dyn std::error::Error>> {
+    Err("Lip-sync feature not enabled. Build with --features lip-sync".into())
+}
+
+#[cfg(not(feature = "lip-sync"))]
+pub fn synth_with_lip_sync(_text: String, _voice_id: &str, _wav_output: &str, _lip_sync_output: &str, _pitch_factor: f32) -> Result<(), Box<dyn std::error::Error>> {
+    Err("Lip-sync feature not enabled. Build with --features lip-sync".into())
 } 

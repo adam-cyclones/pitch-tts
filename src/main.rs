@@ -119,6 +119,42 @@ enum Commands {
         #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
         pitch: PitchArg,
     },
+    
+    /// Extract phonemes from audio file (requires lip-sync feature)
+    #[cfg(feature = "lip-sync")]
+    Phonemes {
+        /// Input audio file (WAV format)
+        #[arg(short, long)]
+        input: String,
+        
+        /// Output JSON file for phoneme data
+        #[arg(short, long, default_value = "phonemes.json")]
+        output: String,
+    },
+    
+    /// Generate lip-sync data with WAV export (requires lip-sync feature)
+    #[cfg(feature = "lip-sync")]
+    Lipsync {
+        /// Voice ID to use
+        #[arg(short, long)]
+        voice: String,
+        
+        /// Text to synthesize
+        #[arg(short, long)]
+        text: String,
+        
+        /// Output WAV file path
+        #[arg(short, long)]
+        wav_output: String,
+        
+        /// Output JSON file for lip-sync data
+        #[arg(short, long, default_value = "lipsync.json")]
+        lipsync_output: String,
+        
+        /// Pitch factor or preset (e.g. 1.2, slomo, deep, child, helium)
+        #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
+        pitch: PitchArg,
+    },
 }
 
 fn main() {
@@ -175,6 +211,34 @@ fn main() {
             }
         }
         
+        #[cfg(feature = "lip-sync")]
+        Some(Commands::Phonemes { input, output }) => {
+            use pitch_tts::extract_phonemes_from_audio;
+            println!("Extracting phonemes from: {}", input);
+            match extract_phonemes_from_audio(input) {
+                Ok(lip_sync_data) => {
+                    let json = serde_json::to_string_pretty(&lip_sync_data).unwrap();
+                    std::fs::write(output, json).unwrap();
+                    println!("Phonemes extracted to: {}", output);
+                    println!("Duration: {:.2}s, Phonemes: {}", lip_sync_data.duration, lip_sync_data.phonemes.len());
+                }
+                Err(e) => eprintln!("Error extracting phonemes: {}", e),
+            }
+        }
+        
+        #[cfg(feature = "lip-sync")]
+        Some(Commands::Lipsync { voice, text, wav_output, lipsync_output, pitch }) => {
+            use pitch_tts::synth_with_lip_sync;
+            let pitch_factor = pitch.as_factor();
+            println!("Generating lip-sync data for: {} (pitch: {})", text, pitch_factor);
+            match synth_with_lip_sync(text.clone(), voice, wav_output, lipsync_output, pitch_factor) {
+                Ok(_) => println!("Lip-sync generation completed successfully!"),
+                Err(e) => eprintln!("Error generating lip-sync data: {}", e),
+            }
+        }
+        
+
+        
         None => {
             // Show help by default instead of playing audio
             if cli.voice.is_some() || cli.text.is_some() {
@@ -183,7 +247,7 @@ fn main() {
                 let text = cli.text.unwrap_or_else(|| "Hello! I'm playing audio from memory directly with piper-rs.".to_string());
                 
                 println!("Using voice: {}", voice_id);
-                let pitch_factor = cli.pitch.as_ref().map(|p| p.as_factor()).unwrap_or(1.0);
+                let _pitch_factor = cli.pitch.as_ref().map(|p| p.as_factor()).unwrap_or(1.0);
                 match synth_with_voice_config(text, &voice_id) {
                     Ok(samples) => {
                         let (_stream, handle) = rodio::OutputStream::try_default().unwrap();

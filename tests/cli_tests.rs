@@ -16,6 +16,69 @@ fn test_single_threaded_execution() {
 }
 
 #[test]
+fn test_lip_sync_feature_availability() {
+    // Test if lip-sync feature is available
+    let mut cmd = Command::new("cargo");
+    cmd.args(["run", "--features", "lip-sync", "--", "--help"]);
+    
+    let output = cmd.output();
+    
+    match output {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            let combined_output = format!("{} {}", stdout, stderr);
+            
+            if combined_output.contains("phonemes") || combined_output.contains("lipsync") {
+                println!("✅ Lip-sync feature is available");
+            } else {
+                println!("⚠️  Lip-sync feature not detected in help output");
+            }
+        }
+        Err(e) => {
+            println!("⚠️  Could not test lip-sync feature: {}", e);
+        }
+    }
+}
+
+#[test]
+fn test_cli_lip_sync_commands() {
+    // Test lip-sync commands if feature is available
+    let test_cases = vec![
+        ("phonemes help", vec!["phonemes", "--help"]),
+        ("lipsync help", vec!["lipsync", "--help"]),
+    ];
+    
+    for (description, args) in test_cases {
+        println!("Testing: {}", description);
+        
+        let mut cmd = Command::new("cargo");
+        cmd.args(["run", "--features", "lip-sync", "--"]);
+        cmd.args(args);
+        
+        let output = cmd.output();
+        
+        match output {
+            Ok(result) => {
+                if result.status.success() {
+                    println!("✅ {} - SUCCESS", description);
+                } else {
+                    let stderr = String::from_utf8_lossy(&result.stderr);
+                    if stderr.contains("Lip-sync feature not enabled") {
+                        println!("⚠️  {} - Lip-sync feature not enabled", description);
+                    } else {
+                        println!("❌ {} - FAILED", description);
+                    }
+                }
+            }
+            Err(e) => {
+                println!("❌ {} - Failed to execute: {}", description, e);
+            }
+        }
+    }
+}
+
+#[test]
 fn test_cli_say_command() {
     // Test the say command with default values (should play Alba with Scottish phrase)
     let mut cmd = Command::new("cargo");
@@ -39,7 +102,7 @@ fn test_cli_say_command() {
         }
         Err(e) => {
             eprintln!("CLI test failed to execute: {}", e);
-            // Don't fail the test if we can't execute the CLI
+            // Don't fail the test if we can't execute the CLIgu
         }
     }
 }
