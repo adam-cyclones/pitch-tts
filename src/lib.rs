@@ -4,7 +4,7 @@ use std::process::Command;
 use std::path::Path;
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
-
+use rubato::{FftFixedIn, Resampler};
 
 
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ impl PitchPreset {
         match self {
             PitchPreset::Slomo => 0.4,
             PitchPreset::Deep => 0.85,
-            PitchPreset::Child => 1.1,
+            PitchPreset::Child => 1.2,
             PitchPreset::Helium => 1.5,
         }
     }
@@ -112,6 +112,96 @@ pub fn pitch_shift(samples: &[f32], pitch_factor: f32) -> Vec<f32> {
     
     shifted
 }
+
+/// High-quality pitch shift without speed change using SoX executable
+pub fn true_pitch_shift(samples: &[f32], sample_rate: usize, pitch_factor: f32) -> Vec<f32> {
+    if (pitch_factor - 1.0).abs() < 0.01 {
+        return samples.to_vec();
+    }
+    
+    // Create temporary input and output files
+    let temp_input = "temp_input.wav";
+    let temp_output = "temp_output.wav";
+    
+    // Write input samples to WAV file
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: sample_rate as u32,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(temp_input, spec).expect("Failed to create temp WAV");
+    for sample in samples {
+        let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+        writer.write_sample(sample_i16).expect("Failed to write sample");
+    }
+    writer.finalize().expect("Failed to finalize WAV");
+    
+    // Calculate pitch shift in cents (1200 cents per octave)
+    let cents = 1200.0 * pitch_factor.log2();
+    
+    // Use sox executable to pitch shift while keeping tempo the same
+    let output = Command::new("sox")
+        .arg(temp_input)
+        .arg(temp_output)
+        .arg("pitch")
+        .arg(&format!("{}", cents))
+        .output()
+        .expect("Failed to execute sox");
+    
+    if !output.status.success() {
+        eprintln!("SoX error: {}", String::from_utf8_lossy(&output.stderr));
+        // Clean up temp files
+        let _ = std::fs::remove_file(temp_input);
+        return samples.to_vec(); // Return original samples on error
+    }
+    
+    // Read the processed audio back
+    let reader = hound::WavReader::open(temp_output).expect("Failed to open output WAV");
+    let samples: Vec<f32> = reader.into_samples::<i16>()
+        .map(|s| s.expect("Failed to read sample") as f32 / 32767.0)
+        .collect();
+    
+    // Clean up temp files
+    let _ = std::fs::remove_file(temp_input);
+    let _ = std::fs::remove_file(temp_output);
+    
+    samples
+}
+
+/// Time-stretch function using rubato (tempo_factor > 1.0 = slower, < 1.0 = faster)
+pub fn time_stretch(samples: &[f32], sample_rate: usize, tempo_factor: f32) -> Vec<f32> {
+    if (tempo_factor - 1.0).abs() < 0.01 {
+        return samples.to_vec(); // No stretch needed
+    }
+    let channels = 1;
+    let input_frame_length = 1024;
+    let _output_frame_length = (input_frame_length as f32 * tempo_factor) as usize;
+    let _fft_size = input_frame_length * 2;
+    let mut resampler = FftFixedIn::<f32>::new(
+        sample_rate, // sample_rate_input
+        (sample_rate as f32 / tempo_factor) as usize, // sample_rate_output
+        input_frame_length, // chunk_size_in
+        1, // sub_chunks
+        channels, // nbr_channels
+    ).expect("Failed to create resampler");
+    let mut output = Vec::new();
+    let mut pos = 0;
+    while pos < samples.len() {
+        let end = (pos + input_frame_length).min(samples.len());
+        let mut chunk = samples[pos..end].to_vec();
+        if chunk.len() < input_frame_length {
+            chunk.resize(input_frame_length, 0.0);
+        }
+        let input = vec![chunk];
+        let result = resampler.process(&input, None).expect("Resample failed");
+        output.extend_from_slice(&result[0]);
+        pos += input_frame_length;
+    }
+    output
+}
+
+
 
 /// Get all available voices
 pub fn get_available_voices() -> Vec<Voice> {
@@ -301,14 +391,14 @@ pub fn synth_with_voice_config(text: String, voice_id: &str) -> Result<Vec<f32>,
     Ok(samples)
 }
 
-/// Synthesize speech to WAV file with pitch shifting
-pub fn synth_to_wav_with_pitch(text: String, voice_id: &str, output_path: &str, pitch_factor: f32) -> Result<(), Box<dyn std::error::Error>> {
+/// Synthesize speech to WAV file with pitch shifting and tempo adjustment
+pub fn synth_to_wav_with_pitch(text: String, voice_id: &str, output_path: &str, pitch_factor: f32, tempo: f32) -> Result<(), Box<dyn std::error::Error>> {
     // Get the raw audio samples
     let samples = synth_with_voice_config(text, voice_id)?;
-    
     // Apply pitch shift if needed
     let processed_samples = pitch_shift(&samples, pitch_factor);
-    
+    // Apply time stretch if needed
+    let processed_samples = time_stretch(&processed_samples, 22050, tempo);
     // Write to WAV file
     let spec = hound::WavSpec {
         channels: 1,
@@ -316,16 +406,227 @@ pub fn synth_to_wav_with_pitch(text: String, voice_id: &str, output_path: &str, 
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    
     let mut writer = hound::WavWriter::create(output_path, spec)?;
-    
     for sample in processed_samples {
         // Convert f32 to i16 and clamp to valid range
         let sample_i16 = (sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
         writer.write_sample(sample_i16)?;
     }
-    
     writer.finalize()?;
-    println!("WAV file written to {} with pitch factor {}", output_path, pitch_factor);
+    println!("WAV file written to {} with pitch factor {} and tempo {}", output_path, pitch_factor, tempo);
     Ok(())
+} 
+
+/// Synthesize, process, and optionally export/play and lipsync.
+/// - If `output_wav` is Some(path), writes to WAV.
+/// - If `play_audio` is true, plays the audio.
+/// - If `lipsync_json` is Some(path), runs WhisperX and saves JSON there; if None and lipsync is true, prints JSON.
+pub fn synthesize_and_handle(
+    text: &str,
+    voice: &str,
+    pitch: &PitchArg,
+    tempo: f32,
+    output_wav: Option<&str>,
+    play_audio: bool,
+    lipsync: bool,
+    lipsync_json: Option<&str>,
+) {
+    let pitch_factor = pitch.as_factor();
+    let samples = match synth_with_voice_config(text.to_string(), voice) {
+        Ok(samples) => samples,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return;
+        }
+    };
+    // Use high-quality pitch shift
+    let processed_samples = true_pitch_shift(&samples, 22050, pitch_factor);
+    let processed_samples = time_stretch(&processed_samples, 22050, tempo);
+
+    // Write to WAV if requested
+    if let Some(wav_path) = output_wav {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 22050,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(wav_path, spec).unwrap();
+        for sample in &processed_samples {
+            let sample_i16 = (*sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+            writer.write_sample(sample_i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        println!("WAV file written to {} with pitch factor {} and tempo {}", wav_path, pitch_factor, tempo);
+    }
+
+    // Play audio if requested
+    if play_audio {
+        if let Ok((_stream, handle)) = rodio::OutputStream::try_default() {
+            if let Ok(sink) = rodio::Sink::try_new(&handle) {
+                let buf = rodio::buffer::SamplesBuffer::new(1, 22050, processed_samples.as_slice());
+                sink.append(buf);
+                sink.sleep_until_end();
+            }
+        }
+    }
+
+    // Lipsync (WhisperX) if requested
+    if lipsync {
+        // Use the WAV file if it was just written, otherwise write a temp WAV
+        let wav_path = if let Some(wav_path) = output_wav {
+            wav_path
+        } else {
+            let temp_wav = "temp_lipsync.wav";
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 22050,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(temp_wav, spec).unwrap();
+            for sample in &processed_samples {
+                let sample_i16 = (*sample * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                writer.write_sample(sample_i16).unwrap();
+            }
+            writer.finalize().unwrap();
+            temp_wav
+        };
+        // Call run_whisperx_on_wav (from main.rs)
+        // This requires the function to be public and imported in the command modules
+        run_whisperx_on_wav(wav_path, lipsync_json);
+        // Clean up temp file if needed
+        if output_wav.is_none() {
+            let _ = std::fs::remove_file(wav_path);
+        }
+    }
+} 
+
+/// Run WhisperX on a WAV file, optionally saving output JSON to a file or printing it.
+pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>) {
+    use std::env;
+    // Check for whisperx
+    let whisperx_available = std::process::Command::new("whisperx")
+        .arg("--help")
+        .output()
+        .is_ok();
+    if !whisperx_available {
+        eprintln!("\n[WhisperX] Error: 'whisperx' executable not found in your PATH.");
+        eprintln!("To use the --lipsync flag, you must install WhisperX:");
+        eprintln!("  python3 -m pip install git+https://github.com/m-bain/whisperx.git");
+        eprintln!("See: https://github.com/m-bain/whisperX\n");
+        return;
+    }
+
+    // If output_json is provided, change to its directory
+    let (run_dir, wav_filename, json_filename, restore_dir): (Option<String>, String, Option<String>, Option<String>) =
+        if let Some(json_path) = output_json {
+            let json_path = std::path::Path::new(json_path);
+            let dir = json_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| std::path::PathBuf::from("."));
+            let json_filename = json_path.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
+            let wav_pathbuf = std::path::Path::new(wav_path);
+            let wav_filename = wav_pathbuf.file_name().and_then(|n| n.to_str()).unwrap_or(wav_path).to_string();
+            let orig_dir = env::current_dir().ok().map(|d| d.to_string_lossy().to_string());
+            (Some(dir.to_string_lossy().to_string()), wav_filename, json_filename, orig_dir)
+        } else {
+            (None, wav_path.to_string(), None, None)
+        };
+
+    // Change directory if needed
+    if let Some(ref dir) = run_dir {
+        if let Err(e) = env::set_current_dir(dir) {
+            eprintln!("Failed to change directory to {}: {}", dir, e);
+            return;
+        }
+    }
+
+    println!("[WhisperX] Running whisperx on {}...", wav_filename);
+    println!("[WhisperX] Current working directory: {:?}", env::current_dir().unwrap_or_default());
+    let whisperx_result = std::process::Command::new("whisperx")
+        .arg(&wav_filename)
+        .arg("--output_dir")
+        .arg(".")
+        .arg("--output_format")
+        .arg("json")
+        .arg("--compute_type")
+        .arg("float32")
+        .output();
+    match whisperx_result {
+        Ok(result) => {
+            println!("[WhisperX] Command stdout: {}", String::from_utf8_lossy(&result.stdout));
+            println!("[WhisperX] Command stderr: {}", String::from_utf8_lossy(&result.stderr));
+            if result.status.success() {
+                // WhisperX writes to <filename>.json (e.g., lipsync_test_phrase.json)
+                let base = if let Some(stripped) = wav_filename.strip_suffix(".wav") {
+                    stripped
+                } else {
+                    &wav_filename
+                };
+                println!("[WhisperX] Base filename: {}", base);
+                let whisperx_json_path = format!("{}.json", base);
+                println!("[WhisperX] Looking for output file: {}", whisperx_json_path);
+                if !std::path::Path::new(&whisperx_json_path).exists() {
+                    eprintln!("[WhisperX] Output JSON not found: {}", whisperx_json_path);
+                    // List files in current directory to see what WhisperX actually created
+                    if let Ok(entries) = std::fs::read_dir(".") {
+                        println!("[WhisperX] Files in current directory:");
+                        for entry in entries {
+                            if let Ok(entry) = entry {
+                                if let Some(name) = entry.file_name().to_str() {
+                                    if name.ends_with(".json") {
+                                        println!("  - {}", name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Restore directory before returning
+                    if let Some(ref orig) = restore_dir {
+                        let _ = env::set_current_dir(orig);
+                    }
+                    return;
+                }
+                match json_filename {
+                    Some(ref json_path) => {
+                        // If the output file is not the expected name, rename it
+                        if json_path != &whisperx_json_path {
+                            match std::fs::rename(&whisperx_json_path, json_path) {
+                                Ok(_) => {
+                                    println!("[WhisperX] Lipsync JSON renamed to {}", json_path);
+                                },
+                                Err(e) => {
+                                    if let Err(copy_err) = std::fs::copy(&whisperx_json_path, json_path) {
+                                        eprintln!("Failed to copy WhisperX output: {}", copy_err);
+                                    } else if let Err(remove_err) = std::fs::remove_file(&whisperx_json_path) {
+                                        eprintln!("Failed to remove original WhisperX output: {}", remove_err);
+                                    } else {
+                                        println!("[WhisperX] Lipsync JSON copied to {}", json_path);
+                                    }
+                                }
+                            }
+                        } else {
+                            println!("[WhisperX] Lipsync JSON written to {}", json_path);
+                        }
+                    }
+                    None => {
+                        println!("[WhisperX] Lipsync JSON written to {}", whisperx_json_path);
+                    }
+                }
+            }
+            else {
+                eprintln!(
+                    "[WhisperX] Failed with status {}:\n{}",
+                    result.status,
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to run WhisperX: {}", e);
+        }
+    }
+    // Restore original directory if changed
+    if let Some(ref orig) = restore_dir {
+        let _ = env::set_current_dir(orig);
+    }
 } 

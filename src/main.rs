@@ -52,6 +52,10 @@ enum Commands {
         #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
         pitch: PitchArg,
 
+        /// Tempo factor (1.0 = normal, 2.0 = twice as slow, 0.5 = twice as fast)
+        #[arg(long, default_value = "1.0", help = "Tempo factor (1.0 = normal, 2.0 = slower, 0.5 = faster)")]
+        tempo: f32,
+
         /// Also run WhisperX and print lipsync JSON to terminal
         #[arg(long)]
         lipsync: bool,
@@ -59,83 +63,37 @@ enum Commands {
     
     /// Export speech to WAV file
     Export {
-        /// Voice ID to use
-        #[arg(short, long)]
+        /// Text to synthesize (defaults to a fun Scottish phrase)
+        #[arg(default_value = "Well hello there! I'm Alba, your Scottish friend. How about we go for a wee walk in the highlands? The weather is absolutely bonnie today!")]
+        text: String,
+        
+        /// Voice ID to use (defaults to en_GB-alba-medium)
+        #[arg(short, long, default_value = "en_GB-alba-medium")]
         voice: String,
         
-        /// Output WAV file path
+        /// Output WAV file path (auto-generated from text if not provided, saved to output_/ directory with output_ prefix)
         #[arg(short, long)]
-        output: String,
-        
-        /// Text to synthesize
-        #[arg(short, long)]
-        text: String,
+        output: Option<String>,
         
         /// Pitch factor or preset (e.g. 1.2, slomo, deep, child, helium)
         #[arg(short, long, value_parser = PitchArg::from_str, default_value = "1.0", help = "Pitch factor (0.5 = octave down, 2.0 = octave up) or preset (slomo, deep, child, helium)")]
         pitch: PitchArg,
 
+        /// Tempo factor (1.0 = normal, 2.0 = twice as slow, 0.5 = twice as fast)
+        #[arg(long, default_value = "1.0", help = "Tempo factor (1.0 = normal, 2.0 = slower, 0.5 = faster)")]
+        tempo: f32,
+
         /// Also run WhisperX and output lipsync JSON
         #[arg(long)]
         lipsync: bool,
 
-        /// Output JSON file for lipsync data (default: output.json, only used if --lipsync is set)
+        /// Output JSON file for lipsync data (default: output.json, saved to output_/ directory with output_ prefix, only used if --lipsync is set)
         #[arg(long, default_value = "output.json")]
         json_output: String,
     },
 }
 
-fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>) {
-    // Check for whisperx
-    let whisperx_available = std::process::Command::new("whisperx")
-        .arg("--help")
-        .output()
-        .is_ok();
-    if !whisperx_available {
-        eprintln!("\n[WhisperX] Error: 'whisperx' executable not found in your PATH.");
-        eprintln!("To use the --lipsync flag, you must install WhisperX:");
-        eprintln!("  python3 -m pip install git+https://github.com/m-bain/whisperx.git");
-        eprintln!("See: https://github.com/m-bain/whisperX\n");
-        return;
-    }
-    println!("[WhisperX] Running whisperx on {}...", wav_path);
-    let whisperx_result = std::process::Command::new("whisperx")
-        .arg(wav_path)
-        .arg("--output_dir")
-        .arg(".")
-        .arg("--output_format")
-        .arg("json")
-        .arg("--compute_type")
-        .arg("float32")
-        .output();
-    match whisperx_result {
-        Ok(result) => {
-            if !result.status.success() {
-                eprintln!("WhisperX failed: {}", String::from_utf8_lossy(&result.stderr));
-            } else {
-                let whisperx_json = format!("{}.json", wav_path);
-                if std::path::Path::new(&whisperx_json).exists() {
-                    if let Some(json_path) = output_json {
-                        if let Err(e) = std::fs::copy(&whisperx_json, json_path) {
-                            eprintln!("Failed to copy WhisperX output: {}", e);
-                        } else {
-                            println!("[WhisperX] Lipsync JSON written to {}", json_path);
-                        }
-                    } else {
-                        let json = std::fs::read_to_string(&whisperx_json).unwrap();
-                        println!("[WhisperX] Lipsync JSON:\n{}", json);
-                    }
-                    let _ = std::fs::remove_file(&whisperx_json);
-                } else {
-                    eprintln!("WhisperX output JSON not found: {}", whisperx_json);
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to run whisperx: {}", e);
-        }
-    }
-}
+
 
 mod commands {
     pub mod list;
@@ -147,8 +105,8 @@ fn main() {
     let cli = Cli::parse();
     match &cli.command {
         Some(Commands::List { by_language }) => handle_list(*by_language),
-        Some(Commands::Say { voice, text, pitch, lipsync }) => handle_say(voice, text, pitch, *lipsync),
-        Some(Commands::Export { voice, output, text, pitch, lipsync, json_output }) => handle_export(voice, output, text, pitch, *lipsync, json_output),
+        Some(Commands::Say { voice, text, pitch, tempo, lipsync }) => handle_say(voice, text, pitch, *tempo, *lipsync),
+        Some(Commands::Export { voice, output, text, pitch, tempo, lipsync, json_output }) => handle_export(voice, output.as_deref(), text, pitch, *tempo, *lipsync, json_output),
         None => {
             // Show help by default instead of playing audio
             if cli.voice.is_some() || cli.text.is_some() {

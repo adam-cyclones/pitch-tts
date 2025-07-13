@@ -23,3 +23,5 @@ models/
 # Temporary files
 *.tmp
 *.temp
+
+output_*

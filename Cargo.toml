@@ -20,6 +20,7 @@ serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 hound = "3.5"
 clap = { version = "4.4", features = ["derive"] }
+rubato = "0.16"
 
 [features]
 default = []
@@ -31,6 +32,3 @@ tokio = { version = "1.0", features = ["full"] }
 
 [workspace]
 resolver = "2"
-
-[env]
-RUST_TEST_THREADS = "1"
