@@ -1,8 +1,9 @@
-use pitch_tts::{PitchArg, synthesize_and_handle};
+use text_to_face::{PitchArg, synthesize_and_handle};
 use std::fs;
 use std::path::Path;
+use crate::LipsyncLevel;
 
-pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &PitchArg, tempo: f32, lipsync: bool, json_output: &str) {
+pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &PitchArg, tempo: f32, lipsync: LipsyncLevel, json_output: &str, lipsync_with_llm: &str) {
     // Determine base name for folder (from text or custom filename)
     let (folder_base, wav_filename) = if let Some(path) = output {
         let filename = Path::new(path).file_name()
@@ -28,10 +29,14 @@ pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &Pitc
     }
     let output_path = format!("{}/{}", output_dir, wav_filename);
     // JSON output filename
-    let json_filename = Path::new(json_output).file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("output.json");
-    let json_output_path = if lipsync {
+    let json_filename = if json_output == "output.json" || json_output.trim().is_empty() {
+        // Use the base name of the WAV file (without extension) for the JSON
+        let base = Path::new(&wav_filename).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        format!("{}.json", base)
+    } else {
+        Path::new(json_output).file_name().and_then(|name| name.to_str()).unwrap_or("output.json").to_string()
+    };
+    let json_output_path = if lipsync != LipsyncLevel::Low {
         format!("{}/{}", output_dir, json_filename)
     } else {
         json_output.to_string()
@@ -45,7 +50,8 @@ pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &Pitc
         Some(&output_path), // Output WAV file
         false, // Do not play audio
         lipsync,
-        if lipsync { Some(&json_output_path) } else { None }, // Save lipsync JSON if requested
+        if lipsync != LipsyncLevel::Low { Some(&json_output_path) } else { None },
+        Some(lipsync_with_llm),
     );
 }
 

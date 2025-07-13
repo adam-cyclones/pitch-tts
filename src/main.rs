@@ -2,14 +2,15 @@ use clap::{Parser, Subcommand};
 use commands::export::handle_export;
 use commands::list::handle_list;
 use commands::say::handle_say;
-use pitch_tts::{synth_with_voice_config, PitchArg};
+use text_to_face::{synth_with_voice_config, PitchArg};
 use rodio::buffer::SamplesBuffer;
 use std::str::FromStr;
+use text_to_face::LipsyncLevel;
 
 
 #[derive(Parser)]
-#[command(name = "pitch-tts")]
-#[command(about = "A text-to-speech tool with pitch shifting and voice selection")]
+#[command(name = "text-to-face")]
+#[command(about = "A text-to-speech tool with pitch shifting, voice selection, and lipsync generation")]
 #[command(version)]
 #[command(propagate_version = true)]
 struct Cli {
@@ -56,9 +57,9 @@ enum Commands {
         #[arg(long, default_value = "1.0", help = "Tempo factor (1.0 = normal, 2.0 = slower, 0.5 = faster)")]
         tempo: f32,
 
-        /// Also run WhisperX and print lipsync JSON to terminal
-        #[arg(long)]
-        lipsync: bool,
+        /// Lipsync level: low (default) or high (adds ARPAbet phonemes)
+        #[arg(long, value_enum, default_value = "low")]
+        lipsync: LipsyncLevel,
     },
     
     /// Export speech to WAV file
@@ -83,9 +84,15 @@ enum Commands {
         #[arg(long, default_value = "1.0", help = "Tempo factor (1.0 = normal, 2.0 = slower, 0.5 = faster)")]
         tempo: f32,
 
-        /// Also run WhisperX and output lipsync JSON
-        #[arg(long)]
-        lipsync: bool,
+        /// Lipsync level: low (default) or high (adds ARPAbet phonemes)
+        #[arg(long, value_enum, default_value = "low")]
+        lipsync: LipsyncLevel,
+
+        /// Ollama model for ARPAbet phoneme generation (e.g., llama4, llama3.2, mistral)
+        /// Note: First-time use will download the model, which may take several minutes
+        /// Uses CMUdict for known words, falls back to Ollama for unknown words
+        #[arg(long, value_name = "MODEL", default_value = "llama4")]
+        lipsync_with_llm: String,
 
         /// Output JSON file for lipsync data (default: output.json, saved to output_/ directory with output_ prefix, only used if --lipsync is set)
         #[arg(long, default_value = "output.json")]
@@ -106,7 +113,7 @@ fn main() {
     match &cli.command {
         Some(Commands::List { by_language }) => handle_list(*by_language),
         Some(Commands::Say { voice, text, pitch, tempo, lipsync }) => handle_say(voice, text, pitch, *tempo, *lipsync),
-        Some(Commands::Export { voice, output, text, pitch, tempo, lipsync, json_output }) => handle_export(voice, output.as_deref(), text, pitch, *tempo, *lipsync, json_output),
+        Some(Commands::Export { voice, output, text, pitch, tempo, lipsync, json_output, lipsync_with_llm }) => handle_export(voice, output.as_deref(), text, pitch, *tempo, *lipsync, json_output, lipsync_with_llm),
         None => {
             // Show help by default instead of playing audio
             if cli.voice.is_some() || cli.text.is_some() {
@@ -127,10 +134,10 @@ fn main() {
                 }
             } else {
                 // Show help by default
-                println!("pitch-tts - A text-to-speech tool with pitch shifting and voice selection");
+                println!("text-to-face - A text-to-speech tool with pitch shifting, voice selection, and lipsync generation");
                 println!();
                 println!("USAGE:");
-                println!("    pitch-tts <SUBCOMMAND>");
+                println!("    text-to-face <SUBCOMMAND>");
                 println!();
                 println!("SUBCOMMANDS:");
                 println!("    list     List all available voices");
@@ -142,7 +149,7 @@ fn main() {
                 println!("    -h, --help       Print help");
                 println!("    -V, --version    Print version");
                 println!();
-                println!("For more information on a specific command, try 'pitch-tts <COMMAND> --help'");
+                println!("For more information on a specific command, try 'text-to-face <COMMAND> --help'");
             }
         }
     }

@@ -347,6 +347,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmudict-fast"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9f73004e928ed46c3e7fd7406d2b12c8674153295f08af084b49860276dc02"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1517,22 +1526,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pitch-tts"
-version = "0.1.0"
-dependencies = [
- "clap",
- "hound",
- "ort-sys",
- "piper-rs",
- "reqwest",
- "rodio",
- "rubato",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2202,6 +2195,24 @@ dependencies = [
  "once_cell",
  "rustix 1.0.7",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "text-to-face"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cmudict-fast",
+ "hound",
+ "once_cell",
+ "ort-sys",
+ "piper-rs",
+ "reqwest",
+ "rodio",
+ "rubato",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

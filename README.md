@@ -1,17 +1,27 @@
-# pitch-tts
+# text-to-face
 
-A fast, flexible text-to-speech (TTS) CLI and Rust library powered by [piper-rs](https://github.com/rhasspy/piper). Features high-quality voice synthesis with real-time pitch shifting and support for 50+ voices across multiple languages.
+A comprehensive **animation pipeline tool** that converts text into speech and facial animation data. Built for character animators, game developers, and content creators who need to generate synchronized audio and facial expressions from text input.
+
+## 🎬 Animation Pipeline Focus
+
+**text-to-face** is specifically designed to create complete animation pipelines:
+
+1. **Text Input** → **Speech Synthesis** → **Lip-sync Data** → **Animation-Ready Output**
+2. **Perfect for**: Character animation, game dialogue, video content, virtual avatars, and interactive storytelling
+3. **Outputs**: WAV audio files + JSON with precise word/phoneme timing + ARPAbet phonemes for facial rigging
 
 ## ✨ Features
 
-- **🎯 Dynamic Voice Selection** - Auto-downloads models from HuggingFace with 50+ voices across 6 languages
-- **🎵 Real-time Pitch Shifting** - Adjust pitch from 0.5x (octave down) to 2.0x (octave up) in real-time
-- **💾 WAV Export** - Export synthesized speech to WAV files for integration with Blender, video editors, and other tools
-- **🔧 Comprehensive CLI** - Intuitive subcommands for listing voices, speaking, exporting, and generating lipsync JSON with WhisperX
-- **🌍 Multi-language Support** - English (US/UK), German, French, Spanish, Italian, and Russian voices
+- **🎯 Animation-Ready Output** - Generate WAV + JSON with word/phoneme timing for direct use in animation software
+- **🎵 Real-time Pitch Shifting** - Adjust character voice characteristics (0.5x to 2.0x pitch range)
+- **💾 Export Pipeline** - Save to organized folders with synchronized audio and animation data
+- **🔧 Comprehensive CLI** - Intuitive commands for animation workflows
+- **🌍 Multi-language Support** - 50+ voices across 6 languages for diverse character needs
 - **⚡ Fast Synthesis** - Built on piper-rs for efficient, high-quality speech generation
-- **📚 Rust Library** - Use as a library for custom TTS workflows and Blender integration
-- **🎬 WhisperX Lip-sync Support** - Generate animation-ready JSON with accurate word/phoneme timings (requires WhisperX)
+- **📚 Rust Library** - Integrate into custom animation pipelines and game engines
+- **🎬 WhisperX Lip-sync** - Generate animation-ready JSON with accurate word/phoneme timings
+- **🤖 AI-Powered Phonemes** - Hybrid CMUdict + LLaMA 4 approach for accurate ARPAbet phonemes
+- **🎭 Character Animation Ready** - ARPAbet phonemes embedded in JSON for facial rigging systems
 
 ## 🚀 Installation
 
@@ -19,6 +29,7 @@ A fast, flexible text-to-speech (TTS) CLI and Rust library powered by [piper-rs]
 - Rust 1.70+ and Cargo
 - Internet connection (for downloading voice models)
 - **For lipsync JSON:** [WhisperX](https://github.com/m-bain/whisperX) must be installed and available in your PATH
+- **For ARPAbet phonemes:** [Ollama](https://ollama.ai/) with LLaMA 4 model (auto-downloaded on first use)
 
 ### Install WhisperX (for lipsync JSON)
 WhisperX is a Python tool. Install it via pip:
@@ -29,63 +40,77 @@ pip install git+https://github.com/m-bain/whisperx.git
 
 Or see the [WhisperX repo](https://github.com/m-bain/whisperX) for more details.
 
+### Install Ollama (for ARPAbet phonemes)
+```bash
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.ai/install.sh | sh
+
+# Then pull the recommended model
+ollama pull llama4
+```
+
 ### Build from Source
 ```bash
-git clone https://github.com/yourusername/pitch-tts.git
-cd pitch-tts
+git clone https://github.com/yourusername/text-to-face.git
+cd text-to-face
 cargo build --release
 ```
 
 ### First Run
-On first run, pitch-tts will automatically download the default voice model (en_GB-alba-medium). Voice models are cached in the `models/` directory.
+On first run, text-to-face will automatically download the default voice model (en_GB-alba-medium). Voice models are cached in the `models/` directory.
 
 ## 📖 Usage
 
-### List Available Voices
+### Animation Pipeline Workflow
+
+**Complete character dialogue generation:**
+```bash
+# Generate a complete animation-ready output
+cargo run -- export \
+  --voice en_GB-alba-medium \
+  --text "Hello there! I'm excited to show you this animation pipeline." \
+  --lipsync high \
+  --lipsync-with-llm llama4
+
+# This creates:
+# - output_hello_there/hello_there.wav (audio file)
+# - output_hello_there/hello_there.json (animation data with ARPAbet phonemes)
+```
+
+### List Available Voices (for character selection)
 ```bash
 cargo run -- list
 ```
 
-### Speak Text
+### Quick Character Dialogue Test
 ```bash
-# Use defaults (Scottish Alba voice with fun phrase)
-cargo run -- say
-
-# Custom text with default voice
-cargo run -- say "Hello, world!"
-
-# Custom voice and text
-cargo run -- say "Bonjour!" --voice fr_FR-gilles-low
-
-# With pitch shifting (1.5x = higher pitch)
-cargo run -- say "High pitched voice" --pitch 1.5
-
-# With pitch preset (helium, child, deep, slomo)
-cargo run -- say "Helium voice!" --pitch helium
-cargo run -- say "Child voice!" --pitch child
-cargo run -- say "Deep voice!" --pitch deep
-cargo run -- say "Slow motion!" --pitch slomo
-
-# Combine all options
-cargo run -- say "Custom message" --voice en_US-amy-medium --pitch 0.8
+# Test a character voice before full export
+cargo run -- say "This is how my character sounds!" --voice en_US-amy-medium --pitch 1.1
 ```
 
-### Export to WAV
+### Export Animation Assets
 ```bash
-cargo run -- export --voice en_GB-alba-medium --output hello.wav --text "Hello world!"
-```
+# Basic animation export
+cargo run -- export --voice en_GB-alba-medium --output character_dialogue.wav --text "Character dialogue here!"
 
-### Generate Lipsync JSON for Animation (WhisperX)
-```bash
-cargo run -- lipsync \
+# High-fidelity animation export (includes ARPAbet phonemes for facial rigging)
+cargo run -- export \
   --voice en_GB-alba-medium \
-  --text "Hello, this is a test for WhisperX!" \
-  --wav-output hello.wav \
-  --json-output lipsync.json \
-  --pitch 1.2
+  --text "She sells seashells by the seashore." \
+  --lipsync high \
+  --lipsync-with-llm llama4
+
+# Custom character voice with specific pitch
+cargo run -- export \
+  --voice en_US-amy-medium \
+  --text "Custom character dialogue" \
+  --pitch 0.9 \
+  --lipsync high \
+  --lipsync-with-llm llama3.2
 ```
-- This will create `hello.wav` and a WhisperX JSON file (`lipsync.json`) with word/phoneme timing data for animation.
-- **Requires WhisperX to be installed and in your PATH.**
 
 ### Legacy Mode (Quick Commands)
 ```bash
@@ -94,16 +119,17 @@ cargo run -- --voice en_US-libritts_r-medium --text "Quick mode!"
 
 ## 📚 Library Usage
 
-Use `pitch_tts` as a Rust library for custom TTS workflows:
+Use `text_to_face` as a Rust library for custom animation pipelines:
 
 ```rust
-use pitch_tts::synth_to_wav_with_pitch;
+use text_to_face::synth_to_wav_with_pitch;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Generate animation assets programmatically
     synth_to_wav_with_pitch(
-        "Hello, this is a test!".to_string(),
+        "Character dialogue here!".to_string(),
         "en_GB-alba-medium",
-        "hello.wav",
+        "character_audio.wav",
         1.0, // pitch factor
     )?;
     Ok(())
@@ -111,6 +137,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 ## 🔧 Configuration
+
+### Animation Output Structure
+Exports are organized in character-friendly folders:
+```
+output_character_dialogue/
+├── character_dialogue.wav          # Audio file for animation
+└── character_dialogue.json         # Animation data with timing + phonemes
+```
 
 ### Voice Model Storage
 Voice models are automatically downloaded and stored in the `models/` directory:
@@ -122,18 +156,43 @@ models/
 └── ...
 ```
 
-### Pitch Shifting
-- **Range**: 0.5x to 2.0x (octave down to octave up)
+### Character Voice Customization
+- **Pitch Range**: 0.5x to 2.0x (octave down to octave up)
 - **Default**: 1.0x (no change)
 - **Algorithm**: Linear interpolation resampling
-- **Presets**:
-  - `slomo`: 0.4 (slow motion)
-  - `deep`: 0.85 (deeper voice)
-  - `child`: 1.1 (child-like voice)
-  - `helium`: 1.5 (chipmunk/helium effect)
+- **Character Presets**:
+  - `slomo`: 0.4 (slow motion character)
+  - `deep`: 0.85 (deep-voiced character)
+  - `child`: 1.1 (child character voice)
+  - `helium`: 1.5 (comic character effect)
 
-### WhisperX JSON Output
-- When using the `lipsync` command, the output JSON will contain word and phoneme timing data as produced by WhisperX. See the [WhisperX repo](https://github.com/m-bain/whisperX) for details on the format.
+### ARPAbet Phoneme Generation (for facial animation)
+- **Primary**: CMUdict for known words (fast, accurate)
+- **Fallback**: LLaMA 4 for unknown words (with validation)
+- **Validation**: Only valid ARPAbet phonemes are included in output
+- **Animation Ready**: Phonemes are embedded in JSON for direct use in facial rigging systems
+- **Models**: Configurable via `--lipsync-with-llm` (default: llama4)
+
+### Animation JSON Output
+- **Word Segments**: Precise timing for each word
+- **ARPAbet Phonemes**: Accurate phoneme data for facial animation
+- **WhisperX Integration**: Professional-grade word/phoneme alignment
+- **Animation Software Compatible**: Ready for Blender, Maya, Unity, Unreal Engine, and other animation tools
+
+## 🎭 Animation Pipeline Integration
+
+### Typical Workflow:
+1. **Script Input** → text-to-face generates audio + timing data
+2. **Animation Software** → Import WAV + JSON for lip-sync
+3. **Facial Rigging** → Use ARPAbet phonemes for mouth shapes
+4. **Final Animation** → Synchronized character performance
+
+### Supported Animation Software:
+- **Blender**: Import WAV + use JSON for lip-sync automation
+- **Maya**: Use JSON data for facial animation curves
+- **Unity**: Import for real-time character dialogue
+- **Unreal Engine**: Use for cinematic sequences
+- **After Effects**: Import for video content creation
 
 ## 🤝 Contributing
 
@@ -141,8 +200,8 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ### Development Setup
 ```bash
-git clone https://github.com/yourusername/pitch-tts.git
-cd pitch-tts
+git clone https://github.com/yourusername/text-to-face.git
+cd text-to-face
 cargo build
 ```
 
@@ -155,4 +214,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [piper-rs](https://github.com/rhasspy/piper) - The core TTS engine
 - [Rhasspy](https://rhasspy.readthedocs.io/) - Voice models and inspiration
 - [HuggingFace](https://huggingface.co/) - Voice model hosting
-- [WhisperX](https://github.com/m-bain/whisperX) - Word/phoneme alignment for animation 
+- [WhisperX](https://github.com/m-bain/whisperX) - Word/phoneme alignment for animation
+- [CMUdict](https://github.com/Alexir/CMUdict) - ARPAbet phoneme dictionary
+- [Ollama](https://ollama.ai/) - Local LLM inference for phoneme generation 

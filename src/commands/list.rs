@@ -1,4 +1,4 @@
-use pitch_tts::get_voices_by_language;
+use text_to_face::{get_available_voices, get_voices_by_language};
 
 pub fn handle_list(by_language: bool) {
     if by_language {
@@ -12,7 +12,7 @@ pub fn handle_list(by_language: bool) {
         }
     } else {
         println!("Available voices:");
-        let voices = pitch_tts::get_available_voices();
+        let voices = get_available_voices();
         for voice in voices {
             println!("  {} - {} ({})", voice.id, voice.display_name, voice.language);
         }

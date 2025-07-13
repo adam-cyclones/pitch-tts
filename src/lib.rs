@@ -3,9 +3,17 @@ use std::fs;
 use std::process::Command;
 use std::path::Path;
 use std::collections::HashMap;
+use once_cell::sync::Lazy;
 use serde::{Serialize, Deserialize};
 use rubato::{FftFixedIn, Resampler};
 
+use clap::ValueEnum;
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+pub enum LipsyncLevel {
+    Low,
+    High,
+}
 
 #[derive(Debug, Clone)]
 pub struct Voice {
@@ -201,7 +209,169 @@ pub fn time_stretch(samples: &[f32], sample_rate: usize, tempo_factor: f32) -> V
     output
 }
 
+/// Use Ollama to get ARPAbet phonemes for a word not found in CMUdict
+fn get_arpabet_from_ollama(word: &str, model: &str) -> Option<Vec<String>> {
+    // List of valid ARPAbet phonemes (no stress markers)
+    const ARPABET: &[&str] = &[
+        "AA", "AE", "AH", "AO", "AW", "AY", "B", "CH", "D", "DH", "EH", "ER", "EY", "F", "G", "HH", "IH", "IY", "JH", "K", "L", "M", "N", "NG", "OW", "OY", "P", "R", "S", "SH", "T", "TH", "UH", "UW", "V", "W", "Y", "Z", "ZH",
+        // With stress markers
+        "AA0", "AA1", "AA2", "AE0", "AE1", "AE2", "AH0", "AH1", "AH2", "AO0", "AO1", "AO2", "AW0", "AW1", "AW2", "AY0", "AY1", "AY2", "EH0", "EH1", "EH2", "ER0", "ER1", "ER2", "EY0", "EY1", "EY2", "IH0", "IH1", "IH2", "IY0", "IY1", "IY2", "OW0", "OW1", "OW2", "OY0", "OY1", "OY2", "UH0", "UH1", "UH2", "UW0", "UW1", "UW2"
+    ];
+    let valid: std::collections::HashSet<&str> = ARPABET.iter().copied().collect();
 
+    let prompt = format!(
+        "Give only the ARPAbet phonemes for the word '{}'. Respond ONLY with the ARPAbet phonemes, space-separated, no explanation, no punctuation, no extra words.\nExample: hello => HH AH0 L OW1\nNow, {} =>",
+        word, word
+    );
+    
+    match std::process::Command::new("ollama")
+        .arg("run")
+        .arg(model)
+        .arg(&prompt)
+        .output() {
+        Ok(output) if output.status.success() => {
+            let response = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !response.is_empty() && !response.contains("error") && !response.contains("not found") {
+                let all_tokens: Vec<String> = response.split_whitespace().map(|s| s.to_string()).collect();
+                let filtered: Vec<String> = all_tokens.iter().filter(|s| valid.contains(s.as_str())).cloned().collect();
+                if filtered.is_empty() {
+                    println!("[ARPAbet] {} => {:?} (from Ollama/{}, but no valid ARPAbet tokens)", word, all_tokens, model);
+                } else if filtered.len() != all_tokens.len() {
+                    println!("[ARPAbet] {} => {:?} (filtered from {:?}, Ollama/{})", word, filtered, all_tokens, model);
+                } else {
+                    println!("[ARPAbet] {} => {:?} (from Ollama/{})", word, filtered, model);
+                }
+                if !filtered.is_empty() {
+                    return Some(filtered);
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+// Global cache for CMUdict - loaded once and reused
+static CMUDICT_CACHE: Lazy<HashMap<String, Vec<Vec<String>>>> = Lazy::new(|| {
+    println!("[ARPAbet] Loading CMUdict into memory...");
+    let project_root = if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        std::path::PathBuf::from(manifest_dir)
+    } else {
+        let mut current = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        loop {
+            if current.join("Cargo.toml").exists() {
+                break current;
+            }
+            if let Some(parent) = current.parent() {
+                current = parent.to_path_buf();
+            } else {
+                break std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            }
+        }
+    };
+    
+    let extra_dir = project_root.join("extra");
+    let dict_path = extra_dir.join("cmudict-0.7b.txt");
+
+    if !extra_dir.exists() {
+        let _ = std::fs::create_dir(&extra_dir);
+    }
+    if !dict_path.exists() {
+        println!("[ARPAbet] cmudict-0.7b.txt not found, downloading to extra/...");
+        let url = "https://raw.githubusercontent.com/Alexir/CMUdict/master/cmudict-0.7b";
+        match std::process::Command::new("curl").arg("-L").arg("-o").arg(&dict_path).arg(url).status() {
+            Ok(status) if status.success() => println!("[ARPAbet] Downloaded cmudict-0.7b.txt to extra/"),
+            _ => {
+                eprintln!("[ARPAbet] Failed to download cmudict-0.7b.txt. Please download it manually.");
+                return HashMap::new();
+            }
+        }
+    }
+    
+    // Simple CMUdict parser - reads the file directly and returns a HashMap
+    let bytes = match std::fs::read(&dict_path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[ARPAbet] Failed to read cmudict file: {}", e);
+            return HashMap::new();
+        }
+    };
+    
+    // Try to convert to UTF-8, with fallback to lossy conversion
+    let content = String::from_utf8_lossy(&bytes);
+    
+    // Validate that this looks like a CMUdict file
+    if !content.contains(";;; # CMUdict") {
+        eprintln!("[ARPAbet] File does not appear to be a valid CMUdict file");
+        return HashMap::new();
+    }
+    
+    let mut dict = HashMap::new();
+    
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip comments and empty lines
+        if line.is_empty() || line.starts_with(";;;") {
+            continue;
+        }
+        
+        // Parse word entries: WORD PH1 PH2 PH3...
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        
+        let word = parts[0];
+        let phonemes: Vec<String> = parts[1..].iter().map(|&s| s.to_string()).collect();
+        
+        // Handle multiple pronunciations (e.g., WORD(1), WORD(2))
+        let base_word = if word.contains('(') {
+            word.split('(').next().unwrap_or(word)
+        } else {
+            word
+        };
+        
+        dict.entry(base_word.to_string()).or_insert_with(Vec::new).push(phonemes);
+    }
+    
+    println!("[ARPAbet] Loaded {} words from CMUdict (cached)", dict.len());
+    dict
+});
+
+/// Given a text, return a Vec<Vec<String>> of ARPAbet phonemes for each word.
+/// Uses CMUdict for known words, falls back to Ollama for unknown words.
+pub fn text_to_arpabet(text: &str, model: &str) -> Vec<Vec<String>> {
+    // Use the cached dictionary
+    let dict = &*CMUDICT_CACHE;
+    
+    text.split_whitespace()
+        .map(|word| {
+            let word_upper = word.trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
+            let arpabet = if let Some(pronunciations) = dict.get(&word_upper) {
+                if let Some(first_pronunciation) = pronunciations.first() {
+                    println!("[ARPAbet] {} => {:?} (from CMUdict)", word_upper, first_pronunciation);
+                    first_pronunciation.clone()
+                } else {
+                    println!("[ARPAbet] {} => [] (no pronunciations)", word_upper);
+                    vec![]
+                }
+            } else {
+                // Try LLM fallback for missing words
+                if let Some(llm_phonemes) = get_arpabet_from_ollama(&word_upper, model) {
+                    llm_phonemes
+                } else {
+                    println!("[ARPAbet] {} => [] (not found in CMUdict or Ollama/{})", word_upper, model);
+                    eprintln!("[ARPAbet] LLM fallback failed for '{}'. Make sure Ollama is installed and the '{}' model is available:", word_upper, model);
+                    eprintln!("  Install: brew install ollama");
+                    eprintln!("  Pull model: ollama pull {} (first-time download may take several minutes)", model);
+                    eprintln!("  We recommend using 'llama4' for best ARPAbet accuracy.");
+                    vec![]
+                }
+            };
+            arpabet
+        })
+        .collect()
+}
 
 /// Get all available voices
 pub fn get_available_voices() -> Vec<Voice> {
@@ -428,8 +598,9 @@ pub fn synthesize_and_handle(
     tempo: f32,
     output_wav: Option<&str>,
     play_audio: bool,
-    lipsync: bool,
+    lipsync: LipsyncLevel,
     lipsync_json: Option<&str>,
+    lipsync_with_llm: Option<&str>,
 ) {
     let pitch_factor = pitch.as_factor();
     let samples = match synth_with_voice_config(text.to_string(), voice) {
@@ -472,7 +643,7 @@ pub fn synthesize_and_handle(
     }
 
     // Lipsync (WhisperX) if requested
-    if lipsync {
+    if lipsync != LipsyncLevel::Low {
         // Use the WAV file if it was just written, otherwise write a temp WAV
         let wav_path = if let Some(wav_path) = output_wav {
             wav_path
@@ -492,10 +663,7 @@ pub fn synthesize_and_handle(
             writer.finalize().unwrap();
             temp_wav
         };
-        // Call run_whisperx_on_wav (from main.rs)
-        // This requires the function to be public and imported in the command modules
-        run_whisperx_on_wav(wav_path, lipsync_json);
-        // Clean up temp file if needed
+        run_whisperx_on_wav(wav_path, lipsync_json, lipsync == LipsyncLevel::High, text, lipsync_with_llm);
         if output_wav.is_none() {
             let _ = std::fs::remove_file(wav_path);
         }
@@ -503,8 +671,9 @@ pub fn synthesize_and_handle(
 } 
 
 /// Run WhisperX on a WAV file, optionally saving output JSON to a file or printing it.
-pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>) {
+pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelity: bool, text: &str, lipsync_with_llm: Option<&str>) {
     use std::env;
+    use serde_json::Value;
     // Check for whisperx
     let whisperx_available = std::process::Command::new("whisperx")
         .arg("--help")
@@ -594,7 +763,7 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>) {
                                 Ok(_) => {
                                     println!("[WhisperX] Lipsync JSON renamed to {}", json_path);
                                 },
-                                Err(e) => {
+                                Err(_e) => {
                                     if let Err(copy_err) = std::fs::copy(&whisperx_json_path, json_path) {
                                         eprintln!("Failed to copy WhisperX output: {}", copy_err);
                                     } else if let Err(remove_err) = std::fs::remove_file(&whisperx_json_path) {
@@ -610,6 +779,34 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>) {
                     }
                     None => {
                         println!("[WhisperX] Lipsync JSON written to {}", whisperx_json_path);
+                    }
+                }
+                // Hi-fidelity: add ARPAbet if requested
+                if hi_fidelity {
+                    if let Some(ref json_path) = json_filename {
+                        if let Ok(mut json_value) = std::fs::read_to_string(json_path).and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
+                            // Get ARPAbet for each word
+                            let model = lipsync_with_llm.unwrap_or("llama4");
+                            let arpabet_dict = text_to_arpabet(text, model);
+                            
+                            // Add phonemes to each word segment
+                            if let Some(word_segments) = json_value.get_mut("word_segments") {
+                                if let Some(word_segments_array) = word_segments.as_array_mut() {
+                                    for (i, word_segment) in word_segments_array.iter_mut().enumerate() {
+                                        if let Some(word_obj) = word_segment.as_object_mut() {
+                                            if let Some(_word) = word_obj.get("word").and_then(|w| w.as_str()) {
+                                                if let Some(phonemes) = arpabet_dict.get(i) {
+                                                    word_obj.insert("phonemes".to_string(), serde_json::to_value(phonemes).unwrap_or(Value::Null));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            let _ = std::fs::write(json_path, serde_json::to_string_pretty(&json_value).unwrap());
+                            println!("[HiFidelity] Added ARPAbet phonemes to word segments in {}", json_path);
+                        }
                     }
                 }
             }
