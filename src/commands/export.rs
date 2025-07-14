@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use crate::LipsyncLevel;
 
-pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &PitchArg, tempo: f32, lipsync: LipsyncLevel, json_output: &str, lipsync_with_llm: &str) {
+pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &PitchArg, tempo: f32, lipsync: LipsyncLevel, json_output: &str, lipsync_with_llm: Option<String>) {
     // Determine base name for folder (from text or custom filename)
     let (folder_base, wav_filename) = if let Some(path) = output {
         let filename = Path::new(path).file_name()
@@ -51,7 +51,7 @@ pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &Pitc
         false, // Do not play audio
         lipsync,
         if lipsync != LipsyncLevel::Low { Some(&json_output_path) } else { None },
-        Some(lipsync_with_llm),
+        lipsync_with_llm.as_deref(),
     );
 }
 

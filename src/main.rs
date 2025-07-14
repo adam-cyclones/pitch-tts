@@ -88,11 +88,11 @@ enum Commands {
         #[arg(long, value_enum, default_value = "low")]
         lipsync: LipsyncLevel,
 
-        /// Ollama model for ARPAbet phoneme generation (e.g., llama4, llama3.2, mistral)
+        /// Ollama model for ARPAbet phoneme generation (e.g., llama3.2, llama4, mistral)
         /// Note: First-time use will download the model, which may take several minutes
-        /// Uses CMUdict for known words, falls back to Ollama for unknown words
-        #[arg(long, value_name = "MODEL", default_value = "llama4")]
-        lipsync_with_llm: String,
+        /// Uses CMUdict for known words, falls back to g2p-en, then Ollama for unknown words if specified
+        #[arg(long, value_name = "MODEL")]
+        lipsync_with_llm: Option<String>,
 
         /// Output JSON file for lipsync data (default: output.json, saved to output_/ directory with output_ prefix, only used if --lipsync is set)
         #[arg(long, default_value = "output.json")]
@@ -113,7 +113,7 @@ fn main() {
     match &cli.command {
         Some(Commands::List { by_language }) => handle_list(*by_language),
         Some(Commands::Say { voice, text, pitch, tempo, lipsync }) => handle_say(voice, text, pitch, *tempo, *lipsync),
-        Some(Commands::Export { voice, output, text, pitch, tempo, lipsync, json_output, lipsync_with_llm }) => handle_export(voice, output.as_deref(), text, pitch, *tempo, *lipsync, json_output, lipsync_with_llm),
+        Some(Commands::Export { voice, output, text, pitch, tempo, lipsync, json_output, lipsync_with_llm }) => handle_export(voice, output.as_deref(), text, pitch, *tempo, *lipsync, json_output, lipsync_with_llm.clone()),
         None => {
             // Show help by default instead of playing audio
             if cli.voice.is_some() || cli.text.is_some() {

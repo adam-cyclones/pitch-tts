@@ -23,6 +23,7 @@ clap = { version = "4.4", features = ["derive"] }
 rubato = "0.16"
 cmudict-fast = "0.8"
 once_cell = "1.19"
+colored = "2.1"
 
 [features]
 default = []

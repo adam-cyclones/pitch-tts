@@ -20,7 +20,7 @@ A comprehensive **animation pipeline tool** that converts text into speech and f
 - **⚡ Fast Synthesis** - Built on piper-rs for efficient, high-quality speech generation
 - **📚 Rust Library** - Integrate into custom animation pipelines and game engines
 - **🎬 WhisperX Lip-sync** - Generate animation-ready JSON with accurate word/phoneme timings
-- **🤖 AI-Powered Phonemes** - Hybrid CMUdict + LLaMA 4 approach for accurate ARPAbet phonemes
+- **🤖 AI-Powered Phonemes** - Hybrid CMUdict + g2p-en + LLaMA 3.2 approach for accurate ARPAbet phonemes
 - **🎭 Character Animation Ready** - ARPAbet phonemes embedded in JSON for facial rigging systems
 
 ## 🚀 Installation
@@ -29,7 +29,8 @@ A comprehensive **animation pipeline tool** that converts text into speech and f
 - Rust 1.70+ and Cargo
 - Internet connection (for downloading voice models)
 - **For lipsync JSON:** [WhisperX](https://github.com/m-bain/whisperX) must be installed and available in your PATH
-- **For ARPAbet phonemes:** [Ollama](https://ollama.ai/) with LLaMA 4 model (auto-downloaded on first use)
+- **For ARPAbet phonemes:** [Ollama](https://ollama.ai/) with LLaMA 3.2 model (auto-downloaded on first use)
+- **For fast fallback:** [g2p-en](https://github.com/Kyubyong/g2p) (Python package)
 
 ### Install WhisperX (for lipsync JSON)
 WhisperX is a Python tool. Install it via pip:
@@ -40,6 +41,11 @@ pip install git+https://github.com/m-bain/whisperx.git
 
 Or see the [WhisperX repo](https://github.com/m-bain/whisperX) for more details.
 
+### Install g2p-en (for fast ARPAbet fallback)
+```bash
+pip install g2p-en
+```
+
 ### Install Ollama (for ARPAbet phonemes)
 ```bash
 # macOS
@@ -49,7 +55,7 @@ brew install ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
 # Then pull the recommended model
-ollama pull llama4
+ollama pull llama3.2
 ```
 
 ### Build from Source
@@ -73,7 +79,7 @@ cargo run -- export \
   --voice en_GB-alba-medium \
   --text "Hello there! I'm excited to show you this animation pipeline." \
   --lipsync high \
-  --lipsync-with-llm llama4
+  --lipsync-with-llm llama3.2
 
 # This creates:
 # - output_hello_there/hello_there.wav (audio file)
@@ -101,7 +107,7 @@ cargo run -- export \
   --voice en_GB-alba-medium \
   --text "She sells seashells by the seashore." \
   --lipsync high \
-  --lipsync-with-llm llama4
+  --lipsync-with-llm llama3.2
 
 # Custom character voice with specific pitch
 cargo run -- export \
@@ -168,10 +174,11 @@ models/
 
 ### ARPAbet Phoneme Generation (for facial animation)
 - **Primary**: CMUdict for known words (fast, accurate)
-- **Fallback**: LLaMA 4 for unknown words (with validation)
+- **Fallback**: g2p-en for unknown words (fast, rule-based)
+- **Last Resort**: LLaMA 3.2 for truly novel words (with validation)
 - **Validation**: Only valid ARPAbet phonemes are included in output
 - **Animation Ready**: Phonemes are embedded in JSON for direct use in facial rigging systems
-- **Models**: Configurable via `--lipsync-with-llm` (default: llama4)
+- **Models**: Configurable via `--lipsync-with-llm` (default: llama3.2)
 
 ### Animation JSON Output
 - **Word Segments**: Precise timing for each word

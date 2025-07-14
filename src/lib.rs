@@ -8,6 +8,7 @@ use serde::{Serialize, Deserialize};
 use rubato::{FftFixedIn, Resampler};
 
 use clap::ValueEnum;
+use colored::*;
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 pub enum LipsyncLevel {
@@ -209,7 +210,10 @@ pub fn time_stretch(samples: &[f32], sample_rate: usize, tempo_factor: f32) -> V
     output
 }
 
-/// Use Ollama to get ARPAbet phonemes for a word not found in CMUdict
+/// Return type for ARPAbet lookup: (phonemes, method)
+type ArpabetResult = (Vec<String>, &'static str);
+
+/// Use Ollama to get ARPAbet phonemes for a word not found in CMUdict or g2p-en
 fn get_arpabet_from_ollama(word: &str, model: &str) -> Option<Vec<String>> {
     // List of valid ARPAbet phonemes (no stress markers)
     const ARPABET: &[&str] = &[
@@ -338,39 +342,49 @@ static CMUDICT_CACHE: Lazy<HashMap<String, Vec<Vec<String>>>> = Lazy::new(|| {
     dict
 });
 
-/// Given a text, return a Vec<Vec<String>> of ARPAbet phonemes for each word.
-/// Uses CMUdict for known words, falls back to Ollama for unknown words.
-pub fn text_to_arpabet(text: &str, model: &str) -> Vec<Vec<String>> {
-    // Use the cached dictionary
+/// Given a text, return a Vec<(Vec<String>, &str)> of ARPAbet phonemes and method for each word.
+/// Uses CMUdict for known words, falls back to g2p-en, then Ollama for unknown words.
+pub fn text_to_arpabet_with_method(text: &str, lipsync_with_llm: Option<&str>) -> Vec<ArpabetResult> {
     let dict = &*CMUDICT_CACHE;
-    
     text.split_whitespace()
         .map(|word| {
             let word_upper = word.trim_matches(|c: char| !c.is_alphanumeric()).to_uppercase();
-            let arpabet = if let Some(pronunciations) = dict.get(&word_upper) {
+            if let Some(pronunciations) = dict.get(&word_upper) {
                 if let Some(first_pronunciation) = pronunciations.first() {
-                    println!("[ARPAbet] {} => {:?} (from CMUdict)", word_upper, first_pronunciation);
-                    first_pronunciation.clone()
+                    println!("{} {} => {:?} (from {})", "[ARPAbet]".cyan(), word_upper, first_pronunciation, "cmudict".bold().green());
+                    (first_pronunciation.clone(), "cmudict")
                 } else {
-                    println!("[ARPAbet] {} => [] (no pronunciations)", word_upper);
-                    vec![]
+                    println!("{} {} => [] (no pronunciations)", "[ARPAbet]".yellow(), word_upper);
+                    (vec![], "cmudict")
+                }
+            } else if let Some(model) = lipsync_with_llm {
+                if !model.trim().is_empty() {
+                    if let Some(llm_phonemes) = get_arpabet_from_ollama(&word_upper, model) {
+                        println!("{} {} => {:?} (from {})", "[ARPAbet]".cyan(), word_upper, llm_phonemes, "llm".bold().magenta());
+                        (llm_phonemes, "llm")
+                    } else {
+                        println!("{} {} => [] (not found in CMUdict or Ollama/{})", "[ARPAbet]".red(), word_upper, model);
+                        eprintln!("{} All fallbacks failed for '{}'. Make sure Ollama is installed and the '{}' model is available:", "[ARPAbet]".red(), word_upper, model);
+                        eprintln!("  brew install ollama");
+                        eprintln!("  ollama pull {} (first-time download may take several minutes)", model);
+                        eprintln!("  We recommend using 'llama3.2' for best ARPAbet accuracy.");
+                        (vec![], "user_manual")
+                    }
+                } else {
+                    eprintln!("{} No phoneme data for '{}'. Rerun with --lipsync-with-llm <model> to enable LLM fallback.", "[ARPAbet]".red(), word);
+                    (vec![], "user_manual")
                 }
             } else {
-                // Try LLM fallback for missing words
-                if let Some(llm_phonemes) = get_arpabet_from_ollama(&word_upper, model) {
-                    llm_phonemes
-                } else {
-                    println!("[ARPAbet] {} => [] (not found in CMUdict or Ollama/{})", word_upper, model);
-                    eprintln!("[ARPAbet] LLM fallback failed for '{}'. Make sure Ollama is installed and the '{}' model is available:", word_upper, model);
-                    eprintln!("  Install: brew install ollama");
-                    eprintln!("  Pull model: ollama pull {} (first-time download may take several minutes)", model);
-                    eprintln!("  We recommend using 'llama4' for best ARPAbet accuracy.");
-                    vec![]
-                }
-            };
-            arpabet
+                eprintln!("{} No phoneme data for '{}'. Rerun with --lipsync-with-llm <model> to enable LLM fallback.", "[ARPAbet]".red(), word);
+                (vec![], "user_manual")
+            }
         })
         .collect()
+}
+
+/// For backward compatibility: just return the phonemes (no method)
+pub fn text_to_arpabet(text: &str, lipsync_with_llm: Option<&str>) -> Vec<Vec<String>> {
+    text_to_arpabet_with_method(text, lipsync_with_llm).into_iter().map(|(p, _)| p).collect()
 }
 
 /// Get all available voices
@@ -514,25 +528,25 @@ pub fn download_voice_files(voice: &Voice) -> Result<(String, String), Box<dyn s
     let config_path = models_dir.join(&config_filename);
 
     if !model_path.exists() {
-        println!("Downloading {} voice model...", voice.display_name);
+        println!("{} voice model...", voice.display_name.yellow());
         let output = Command::new("curl")
             .arg("-L").arg("-o").arg(&model_path).arg(&voice.model_path)
             .output()?;
         if !output.status.success() {
             return Err(format!("Failed to download {}: {}", voice.display_name, String::from_utf8_lossy(&output.stderr)).into());
         }
-        println!("Successfully downloaded {}", voice.display_name);
+        println!("{}", "Successfully downloaded".green());
     }
     
     if !config_path.exists() {
-        println!("Downloading {} config...", voice.display_name);
+        println!("{} config...", voice.display_name.yellow());
         let output = Command::new("curl")
             .arg("-L").arg("-o").arg(&config_path).arg(&voice.config_path)
             .output()?;
         if !output.status.success() {
             return Err(format!("Failed to download config for {}: {}", voice.display_name, String::from_utf8_lossy(&output.stderr)).into());
         }
-        println!("Successfully downloaded config for {}", voice.display_name);
+        println!("{}", "Successfully downloaded config for".green());
     }
     
     Ok((model_path.to_string_lossy().to_string(), config_path.to_string_lossy().to_string()))
@@ -583,7 +597,7 @@ pub fn synth_to_wav_with_pitch(text: String, voice_id: &str, output_path: &str, 
         writer.write_sample(sample_i16)?;
     }
     writer.finalize()?;
-    println!("WAV file written to {} with pitch factor {} and tempo {}", output_path, pitch_factor, tempo);
+    println!("{} file written to {} with pitch factor {} and tempo {}", "WAV".green(), output_path, pitch_factor, tempo);
     Ok(())
 } 
 
@@ -606,7 +620,8 @@ pub fn synthesize_and_handle(
     let samples = match synth_with_voice_config(text.to_string(), voice) {
         Ok(samples) => samples,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("{}", "Error:".red());
+            eprintln!("{}", e);
             return;
         }
     };
@@ -628,7 +643,7 @@ pub fn synthesize_and_handle(
             writer.write_sample(sample_i16).unwrap();
         }
         writer.finalize().unwrap();
-        println!("WAV file written to {} with pitch factor {} and tempo {}", wav_path, pitch_factor, tempo);
+        println!("{} file written to {} with pitch factor {} and tempo {}", "WAV".green(), wav_path, pitch_factor, tempo);
     }
 
     // Play audio if requested
@@ -680,10 +695,10 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
         .output()
         .is_ok();
     if !whisperx_available {
-        eprintln!("\n[WhisperX] Error: 'whisperx' executable not found in your PATH.");
-        eprintln!("To use the --lipsync flag, you must install WhisperX:");
+        eprintln!("\n{} Error: 'whisperx' executable not found in your PATH.", "[WhisperX]".red());
+        eprintln!("{} To use the --lipsync flag, you must install WhisperX:", "[WhisperX]".red());
         eprintln!("  python3 -m pip install git+https://github.com/m-bain/whisperx.git");
-        eprintln!("See: https://github.com/m-bain/whisperX\n");
+        eprintln!("{} See: https://github.com/m-bain/whisperX\n", "[WhisperX]".red());
         return;
     }
 
@@ -704,13 +719,13 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
     // Change directory if needed
     if let Some(ref dir) = run_dir {
         if let Err(e) = env::set_current_dir(dir) {
-            eprintln!("Failed to change directory to {}: {}", dir, e);
+            eprintln!("{} Failed to change directory to {}: {}", "[WhisperX]".red(), dir, e);
             return;
         }
     }
 
-    println!("[WhisperX] Running whisperx on {}...", wav_filename);
-    println!("[WhisperX] Current working directory: {:?}", env::current_dir().unwrap_or_default());
+    println!("{} Running whisperx on {}...", "[WhisperX]".cyan(), wav_filename);
+    println!("{} Current working directory: {:?}", "[WhisperX]".cyan(), env::current_dir().unwrap_or_default());
     let whisperx_result = std::process::Command::new("whisperx")
         .arg(&wav_filename)
         .arg("--output_dir")
@@ -722,8 +737,8 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
         .output();
     match whisperx_result {
         Ok(result) => {
-            println!("[WhisperX] Command stdout: {}", String::from_utf8_lossy(&result.stdout));
-            println!("[WhisperX] Command stderr: {}", String::from_utf8_lossy(&result.stderr));
+            println!("{} Command stdout: {}", "[WhisperX]".cyan(), String::from_utf8_lossy(&result.stdout));
+            println!("{} Command stderr: {}", "[WhisperX]".red(), String::from_utf8_lossy(&result.stderr));
             if result.status.success() {
                 // WhisperX writes to <filename>.json (e.g., lipsync_test_phrase.json)
                 let base = if let Some(stripped) = wav_filename.strip_suffix(".wav") {
@@ -731,14 +746,14 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
                 } else {
                     &wav_filename
                 };
-                println!("[WhisperX] Base filename: {}", base);
+                println!("{} Base filename: {}", "[WhisperX]".cyan(), base);
                 let whisperx_json_path = format!("{}.json", base);
-                println!("[WhisperX] Looking for output file: {}", whisperx_json_path);
+                println!("{} Looking for output file: {}", "[WhisperX]".cyan(), whisperx_json_path);
                 if !std::path::Path::new(&whisperx_json_path).exists() {
-                    eprintln!("[WhisperX] Output JSON not found: {}", whisperx_json_path);
+                    eprintln!("{} Output JSON not found: {}", "[WhisperX]".red(), whisperx_json_path);
                     // List files in current directory to see what WhisperX actually created
                     if let Ok(entries) = std::fs::read_dir(".") {
-                        println!("[WhisperX] Files in current directory:");
+                        println!("{} Files in current directory:", "[WhisperX]".cyan());
                         for entry in entries {
                             if let Ok(entry) = entry {
                                 if let Some(name) = entry.file_name().to_str() {
@@ -761,24 +776,24 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
                         if json_path != &whisperx_json_path {
                             match std::fs::rename(&whisperx_json_path, json_path) {
                                 Ok(_) => {
-                                    println!("[WhisperX] Lipsync JSON renamed to {}", json_path);
+                                    println!("{} Lipsync JSON renamed to {}", "[WhisperX]".cyan(), json_path);
                                 },
                                 Err(_e) => {
                                     if let Err(copy_err) = std::fs::copy(&whisperx_json_path, json_path) {
-                                        eprintln!("Failed to copy WhisperX output: {}", copy_err);
+                                        eprintln!("{} Failed to copy WhisperX output: {}", "[WhisperX]".red(), copy_err);
                                     } else if let Err(remove_err) = std::fs::remove_file(&whisperx_json_path) {
-                                        eprintln!("Failed to remove original WhisperX output: {}", remove_err);
+                                        eprintln!("{} Failed to remove original WhisperX output: {}", "[WhisperX]".red(), remove_err);
                                     } else {
-                                        println!("[WhisperX] Lipsync JSON copied to {}", json_path);
+                                        println!("{} Lipsync JSON copied to {}", "[WhisperX]".cyan(), json_path);
                                     }
                                 }
                             }
                         } else {
-                            println!("[WhisperX] Lipsync JSON written to {}", json_path);
+                            println!("{} Lipsync JSON written to {}", "[WhisperX]".cyan(), json_path);
                         }
                     }
                     None => {
-                        println!("[WhisperX] Lipsync JSON written to {}", whisperx_json_path);
+                        println!("{} Lipsync JSON written to {}", "[WhisperX]".cyan(), whisperx_json_path);
                     }
                 }
                 // Hi-fidelity: add ARPAbet if requested
@@ -786,8 +801,7 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
                     if let Some(ref json_path) = json_filename {
                         if let Ok(mut json_value) = std::fs::read_to_string(json_path).and_then(|s| serde_json::from_str::<Value>(&s).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
                             // Get ARPAbet for each word
-                            let model = lipsync_with_llm.unwrap_or("llama4");
-                            let arpabet_dict = text_to_arpabet(text, model);
+                            let arpabet_dict = text_to_arpabet_with_method(text, lipsync_with_llm);
                             
                             // Add phonemes to each word segment
                             if let Some(word_segments) = json_value.get_mut("word_segments") {
@@ -795,8 +809,9 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
                                     for (i, word_segment) in word_segments_array.iter_mut().enumerate() {
                                         if let Some(word_obj) = word_segment.as_object_mut() {
                                             if let Some(_word) = word_obj.get("word").and_then(|w| w.as_str()) {
-                                                if let Some(phonemes) = arpabet_dict.get(i) {
+                                                if let Some((phonemes, method)) = arpabet_dict.get(i) {
                                                     word_obj.insert("phonemes".to_string(), serde_json::to_value(phonemes).unwrap_or(Value::Null));
+                                                    word_obj.insert("phoneme_method".to_string(), serde_json::to_value(method).unwrap_or(Value::Null));
                                                 }
                                             }
                                         }
@@ -805,21 +820,22 @@ pub fn run_whisperx_on_wav(wav_path: &str, output_json: Option<&str>, hi_fidelit
                             }
                             
                             let _ = std::fs::write(json_path, serde_json::to_string_pretty(&json_value).unwrap());
-                            println!("[HiFidelity] Added ARPAbet phonemes to word segments in {}", json_path);
+                            println!("{} Added ARPAbet phonemes to word segments in {}", "[HiFidelity]".cyan(), json_path);
                         }
                     }
                 }
             }
             else {
                 eprintln!(
-                    "[WhisperX] Failed with status {}:\n{}",
+                    "{} Failed with status {}:\n{}",
+                    "[WhisperX]".red(),
                     result.status,
                     String::from_utf8_lossy(&result.stderr)
                 );
             }
         }
         Err(e) => {
-            eprintln!("Failed to run WhisperX: {}", e);
+            eprintln!("{} Failed to run WhisperX: {}", "[WhisperX]".red(), e);
         }
     }
     // Restore original directory if changed
