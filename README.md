@@ -224,3 +224,28 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [WhisperX](https://github.com/m-bain/whisperX) - Word/phoneme alignment for animation
 - [CMUdict](https://github.com/Alexir/CMUdict) - ARPAbet phoneme dictionary
 - [Ollama](https://ollama.ai/) - Local LLM inference for phoneme generation 
+
+# Packaging the Blender Plugin
+
+To package the Blender plugin as a zip file for installation in Blender, use the Rust-powered xtask:
+
+```sh
+cargo run -p xtask -- package-blender-plugin
+```
+
+This will create (or overwrite) `pitch_tts_blender.zip` in the project root, excluding `__pycache__` and `.DS_Store` files.
+
+## Optional: Cargo Alias
+
+You can add the following to your `Cargo.toml` to create a convenient alias:
+
+```toml
+[alias]
+package-blender = "run -p xtask -- package-blender-plugin"
+```
+
+Then you can simply run:
+
+```sh
+cargo package-blender
+``` 
