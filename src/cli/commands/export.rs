@@ -4,53 +4,52 @@ use std::path::Path;
 use crate::LipsyncLevel;
 
 pub fn handle_export(voice: &str, output: Option<&str>, text: &str, pitch: &PitchArg, tempo: f32, lipsync: LipsyncLevel, json_output: &str, lipsync_with_llm: Option<String>) {
-    // Determine base name for folder (from text or custom filename)
-    let (folder_base, wav_filename) = if let Some(path) = output {
-        let filename = Path::new(path).file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("output.wav");
-        let stem = Path::new(filename).file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        (clean_for_folder(stem), filename.to_string())
+    use std::path::PathBuf;
+    let (wav_path, json_path): (PathBuf, PathBuf) = if let Some(path) = output {
+        let p = Path::new(path);
+        if p.extension().map(|e| e == "wav").unwrap_or(false) {
+            // --output is a file path
+            let wav = p.to_path_buf();
+            let base = p.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+            let dir = p.parent().unwrap_or_else(|| Path::new("."));
+            let json = dir.join(format!("{}.json", base));
+            (wav, json)
+        } else {
+            // --output is a directory
+            let dir = p;
+            let filename = generate_filename_from_text(text);
+            let base = Path::new(&filename).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+            let wav = dir.join(&filename);
+            let json = dir.join(format!("{}.json", base));
+            (wav, json)
+        }
     } else {
+        // No output specified, use CWD
         let filename = generate_filename_from_text(text);
-        let stem = Path::new(&filename).file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        (clean_for_folder(stem), filename)
+        let base = Path::new(&filename).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+        let wav = Path::new(&filename).to_path_buf();
+        let json = Path::new(&format!("{}.json", base)).to_path_buf();
+        (wav, json)
     };
-    let output_dir = format!("output_{}", folder_base);
-    if !Path::new(&output_dir).exists() {
-        if let Err(e) = fs::create_dir(&output_dir) {
-            eprintln!("Failed to create output directory: {}", e);
-            return;
+    // Ensure output directory exists
+    if let Some(parent) = wav_path.parent() {
+        if !parent.exists() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                eprintln!("Failed to create output directory: {}", e);
+                return;
+            }
         }
     }
-    let output_path = format!("{}/{}", output_dir, wav_filename);
-    // JSON output filename
-    let json_filename = if json_output == "output.json" || json_output.trim().is_empty() {
-        // Use the base name of the WAV file (without extension) for the JSON
-        let base = Path::new(&wav_filename).file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-        format!("{}.json", base)
-    } else {
-        Path::new(json_output).file_name().and_then(|name| name.to_str()).unwrap_or("output.json").to_string()
-    };
-    let json_output_path = if lipsync != LipsyncLevel::Low {
-        format!("{}/{}", output_dir, json_filename)
-    } else {
-        json_output.to_string()
-    };
-    println!("Exporting voice: {} to {} (pitch: {}, tempo: {})", voice, output_path, pitch.as_factor(), tempo);
+    println!("Exporting voice: {} to {:?} (pitch: {}, tempo: {})", voice, wav_path, pitch.as_factor(), tempo);
     synthesize_and_handle(
         text,
         voice,
         pitch,
         tempo,
-        Some(&output_path), // Output WAV file
+        Some(wav_path.to_str().unwrap()), // Output WAV file
         false, // Do not play audio
         lipsync,
-        if lipsync != LipsyncLevel::Low { Some(&json_output_path) } else { None },
+        if lipsync != LipsyncLevel::Low { Some(json_path.to_str().unwrap()) } else { None },
         lipsync_with_llm.as_deref(),
     );
 }
