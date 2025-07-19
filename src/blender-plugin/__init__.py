@@ -4,20 +4,17 @@ bl_info = {
     "category": "Animation",
     "author": "Your Name",
     "description": "Generate and import text-to-face lipsync JSON and audio using the Rust backend.",
-    "version": (0, 1, 2),
+    "version": (0, 2, 6),
 }
 
 import bpy
 import json
 import os
-import tempfile
 import subprocess
 import shutil
 import platform
 import hashlib
 from typing import Optional, List, Dict, Any
-import math
-from bpy_extras.io_utils import ImportHelper
 
 # Simple ARPAbet to viseme mapping (customize as needed)
 ARPABET_TO_VISEME = {
@@ -224,6 +221,27 @@ def get_voices():
         print(f"[Text-to-Face] Failed to get voices: {e}")
         return []
 
+# Restore text, voice, and pitch properties
+class TEXTTOFACE_Props(bpy.types.PropertyGroup):
+    text: bpy.props.StringProperty(
+        name="Text",
+        description="Text to synthesize",
+        default="Hello from Blender!"
+    )
+    voice: bpy.props.EnumProperty(
+        name="Voice",
+        description="Voice to use",
+        items=lambda self, context: get_voices() or [("", "(No voices found)", "")],
+    )
+    pitch: bpy.props.FloatProperty(
+        name="Pitch",
+        description="Pitch factor (1.0 = normal)",
+        default=1.0,
+        min=0.5,
+        max=2.0
+    )
+
+# Restore Preview and Generate operators
 class TEXTTOFACE_OT_preview_audio(bpy.types.Operator):
     bl_idname = "texttoface.preview_audio"
     bl_label = "Preview Audio"
@@ -280,13 +298,13 @@ class TEXTTOFACE_OT_generate_audio(bpy.types.Operator):
             props.text,
             "--voice", props.voice,
             "--output", wav_path,
-            "--pitch", str(props.pitch)
+            "--pitch", str(props.pitch),
+            "--lipsync", "high",
+            "--lipsync-with-llm", "llama3.2"
         ]
         try:
             runner.run_command(cmd)
-            # Add audio to the VSE timeline
             bpy.ops.sequencer.sound_strip_add(filepath=wav_path, frame_start=1, channel=1)
-            # Find the loaded audio strip in the VSE
             seq = context.scene.sequence_editor
             if not seq:
                 seq = context.scene.sequence_editor_create()
@@ -298,7 +316,6 @@ class TEXTTOFACE_OT_generate_audio(bpy.types.Operator):
             if not audio_strip:
                 self.report({'ERROR'}, "Audio strip not found in VSE after loading.")
                 return {'CANCELLED'}
-            # Parse JSON for word/phoneme timings
             if not os.path.exists(json_path):
                 self.report({'ERROR'}, f"JSON timing file not found: {json_path}")
                 return {'CANCELLED'}
@@ -306,35 +323,41 @@ class TEXTTOFACE_OT_generate_audio(bpy.types.Operator):
                 lipsync_data = json.load(f)
             fps = context.scene.render.fps
             word_segments = lipsync_data.get('word_segments', [])
-            # Split at word boundaries
+
+            # Step 1: Get all split points
+            split_frames = sorted({int(round(word['start'] * fps)) for word in word_segments}
+                                 | {int(round(word['end'] * fps)) for word in word_segments})
+
+            # Step 2: Perform all splits on initial audio strip
+            split_frames = sorted(split_frames)
+            current_strip = audio_strip
+
+            for i, frame in enumerate(split_frames):
+                bpy.ops.sequencer.select_all(action='DESELECT')
+                current_strip.select = True
+                context.scene.frame_current = frame
+                bpy.ops.sequencer.split(frame=frame, type='SOFT')
+
+                # Get the two resulting strips
+                left = next((s for s in seq.sequences_all
+                            if s.type == 'SOUND' and s.frame_final_end == frame), None)
+                right = next((s for s in seq.sequences_all
+                            if s.type == 'SOUND' and s.frame_final_start == frame), None)
+
+                if right:
+                    current_strip = right
+
+            # Step 3: Match strips to word_segments and label
             strips_by_word = []
-            for i, word in enumerate(word_segments):
-                word_start = int(round(word['start'] * fps))
-                word_end = int(round(word['end'] * fps))
-                if i == 0:
-                    audio_strip.frame_final_start = word_start
-                # Split at word_end (unless last word)
-                if i < len(word_segments) - 1:
-                    bpy.ops.sequencer.select_all(action='DESELECT')
-                    audio_strip.select = True
-                    context.scene.frame_current = word_end
-                    bpy.ops.sequencer.split(frame=word_end, type='SOFT')
-                    # After split, find the left strip (start to word_end)
-                    for s in seq.sequences_all:
-                        if s.type == 'SOUND' and s.frame_final_start == word_start and s.frame_final_end == word_end:
-                            s.name = f"word_{word['word']}"
-                            strips_by_word.append((s, word))
-                            break
-                    # Find the right strip for next iteration
-                    for s in seq.sequences_all:
-                        if s.type == 'SOUND' and s.frame_final_start == word_end:
-                            audio_strip = s
-                            break
-                else:
-                    # Last word
-                    audio_strip.name = f"word_{word['word']}"
-                    strips_by_word.append((audio_strip, word))
-            # For each word, split into phoneme segments
+            for word in word_segments:
+                start = int(round(word['start'] * fps))
+                end = int(round(word['end'] * fps))
+                matching_strip = next((s for s in seq.sequences_all if s.type == 'SOUND' and s.frame_final_start == start and s.frame_final_end == end), None)
+                if matching_strip:
+                    matching_strip.name = f"word_{word['word']}"
+                    strips_by_word.append((matching_strip, word))
+
+            # Step 4: Phoneme splitting and meta strips (as before)
             for strip, word in strips_by_word:
                 phonemes = word.get('phonemes', [])
                 n = len(phonemes)
@@ -352,22 +375,18 @@ class TEXTTOFACE_OT_generate_audio(bpy.types.Operator):
                     strip.select = True
                     context.scene.frame_current = ph_frame
                     bpy.ops.sequencer.split(frame=ph_frame, type='SOFT')
-                    # Find left strip
                     for s in seq.sequences_all:
                         if s.type == 'SOUND' and s.frame_final_start == prev_start and s.frame_final_end == ph_frame:
                             s.name = f"ph_{phonemes[j]}"
                             ph_strips.append(s)
                             break
-                    # Find right strip for next iteration
                     for s in seq.sequences_all:
                         if s.type == 'SOUND' and s.frame_final_start == ph_frame:
                             strip = s
                             break
                     prev_start = ph_frame
-                # Last phoneme
                 strip.name = f"ph_{phonemes[-1]}"
                 ph_strips.append(strip)
-                # Optionally group phoneme strips into a Meta Strip
                 bpy.ops.sequencer.select_all(action='DESELECT')
                 for s in ph_strips:
                     s.select = True
@@ -415,119 +434,86 @@ class TEXTTOFACE_OT_export_shape_keys(bpy.types.Operator):
         self.report({'INFO'}, "Shape key keyframes exported from phoneme strips!")
         return {'FINISHED'}
 
-class TEXTTOFACE_OT_load_last_audio(bpy.types.Operator):
-    bl_idname = "texttoface.load_last_audio"
-    bl_label = "Load Last Generated Audio"
-    bl_description = "Load the last generated audio for this file/voice/text if it exists"
+class TEXTTOFACE_OT_open_file(bpy.types.Operator):
+    bl_idname = "texttoface.open_file"
+    bl_label = "Open File"
+    bl_description = "Open a generated file for playback or lipsync (.wav or .json)"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    filter_glob: bpy.props.StringProperty(
+        default="*.wav;",
+        options={'HIDDEN'}
+    )
+
     def execute(self, context):
-        props = context.scene.texttoface_props
-        blend_path = bpy.data.filepath
-        wav_path = get_generated_wav_path(blend_path, props.voice, props.text)
-        if os.path.exists(wav_path):
-            bpy.ops.sound.open(filepath=wav_path)
-            self.report({'INFO'}, f"Loaded audio: {wav_path}")
-            return {'FINISHED'}
-        else:
-            self.report({'ERROR'}, "No generated audio found for this file/voice/text.")
+        import os
+        if (
+            not self.filepath
+            or not self.filepath.lower().endswith('.wav')
+            or not os.path.exists(self.filepath)
+        ):
+            self.report({'ERROR'}, "Please select a valid .wav file.")
             return {'CANCELLED'}
+        bpy.ops.sequencer.sound_strip_add(filepath=self.filepath, frame_start=1, channel=1)
+        self.report({'INFO'}, f"Loaded audio: {self.filepath}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        import os
+        generated_dir = os.path.join(get_app_data_dir(), "generated")
+        self.filepath = os.path.join(generated_dir, "dummy.wav")
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
 
 class TEXTTOFACE_PT_panel(bpy.types.Panel):
     bl_label = "Text-to-Face Lipsync"
     bl_idname = "TEXTTOFACE_PT_panel"
-    bl_space_type = "SEQUENCE_EDITOR"  # Moved from VIEW_3D to SEQUENCE_EDITOR
+    bl_space_type = "SEQUENCE_EDITOR"
     bl_region_type = "UI"
     bl_category = "Text-to-Face"
 
     def draw(self, context):
         layout = self.layout
         props = context.scene.texttoface_props
+
+        # Text input
+        layout.label(text="Input Text")
         layout.prop(props, "text")
-        layout.prop(props, "voice")
-        layout.prop(props, "pitch")
-        layout.operator(TEXTTOFACE_OT_preview_audio.bl_idname, text="Preview Audio")
-        layout.operator(TEXTTOFACE_OT_generate_audio.bl_idname, text="Generate Audio and Split for Lipsync")
-        layout.operator(TEXTTOFACE_OT_load_last_audio.bl_idname, text="Load Last Generated Audio")
-        layout.operator(TEXTTOFACE_OT_export_shape_keys.bl_idname, text="Export to Shape Keys")
-        # Placeholder for new lipsync workflow UI (phoneme/word splitting, keyframe export, etc.)
 
-class TEXTTOFACE_Props(bpy.types.PropertyGroup):
-    text: bpy.props.StringProperty(
-        name="Text",
-        description="Text to synthesize",
-        default="Hello from Blender!"
-    )
-    voice: bpy.props.EnumProperty(
-        name="Voice",
-        description="Voice to use",
-        items=lambda self, context: get_voices() or [("", "(No voices found)", "")],
-    )
-    pitch: bpy.props.FloatProperty(
-        name="Pitch",
-        description="Pitch factor (1.0 = normal)",
-        default=1.0,
-        min=0.5,
-        max=2.0
-    )
+        # Preview and Generate in a row
+        layout.label(text="Actions")
+        row = layout.row()
+        row.operator(TEXTTOFACE_OT_preview_audio.bl_idname, text="Preview Audio")
+        row.operator(TEXTTOFACE_OT_generate_audio.bl_idname, text="Generate & Split for Lipsync")
 
-class TEXTTOFACE_PT_voice_library(bpy.types.Panel):
-    bl_label = "Voice Library"
-    bl_idname = "TEXTTOFACE_PT_voice_library"
-    bl_space_type = "SEQUENCE_EDITOR"  # Moved from VIEW_3D to SEQUENCE_EDITOR
-    bl_region_type = "UI"
-    bl_category = "Text-to-Face"
-    def draw(self, context):
-        layout = self.layout
-        app_data = get_app_data_dir()
-        gen_dir = os.path.join(app_data, "generated")
-        if not os.path.exists(gen_dir):
-            layout.label(text="No generated audio found.")
-            return
-        wavs = [f for f in os.listdir(gen_dir) if f.endswith(".wav")]
-        if not wavs:
-            layout.label(text="No generated audio found.")
-            return
-        for wav in sorted(wavs):
-            row = layout.row()
-            row.label(text=wav)
-            op = row.operator("texttoface.load_specific_audio", text="Load")
-            op.wav_filename = wav
+        # File picker as alternative
+        layout.label(text="Or Load File (.wav)")
+        layout.operator("texttoface.open_file", text="Open File", icon="FILE_FOLDER", )
 
-class TEXTTOFACE_OT_load_specific_audio(bpy.types.Operator):
-    bl_idname = "texttoface.load_specific_audio"
-    bl_label = "Load Audio"
-    bl_description = "Load this generated audio into Blender"
-    wav_filename: bpy.props.StringProperty()
-    def execute(self, context):
-        app_data = get_app_data_dir()
-        wav_path = os.path.join(app_data, "generated", self.wav_filename)
-        if os.path.exists(wav_path):
-            bpy.ops.sound.open(filepath=wav_path)
-            self.report({'INFO'}, f"Loaded audio: {wav_path}")
-            return {'FINISHED'}
-        else:
-            self.report({'ERROR'}, "Audio file not found.")
-            return {'CANCELLED'}
+        # Output section
+        layout.label(text="Output")
+        row = layout.row()
+        row.operator(TEXTTOFACE_OT_export_shape_keys.bl_idname, text="Convert to Shape Keys")
+
+# Update register/unregister to include the new/old classes
 
 def register():
     bpy.utils.register_class(TEXTTOFACE_AddonPreferences)
     bpy.utils.register_class(TEXTTOFACE_Props)
     bpy.types.Scene.texttoface_props = bpy.props.PointerProperty(type=TEXTTOFACE_Props)
     bpy.utils.register_class(TEXTTOFACE_PT_panel)
-    bpy.utils.register_class(TEXTTOFACE_PT_voice_library)
+    bpy.utils.register_class(TEXTTOFACE_OT_export_shape_keys)
+    bpy.utils.register_class(TEXTTOFACE_OT_open_file)
     bpy.utils.register_class(TEXTTOFACE_OT_preview_audio)
     bpy.utils.register_class(TEXTTOFACE_OT_generate_audio)
-    bpy.utils.register_class(TEXTTOFACE_OT_load_last_audio)
-    bpy.utils.register_class(TEXTTOFACE_OT_load_specific_audio)
-    bpy.utils.register_class(TEXTTOFACE_OT_export_shape_keys)
 
 def unregister():
     bpy.utils.unregister_class(TEXTTOFACE_AddonPreferences)
     bpy.utils.unregister_class(TEXTTOFACE_PT_panel)
-    bpy.utils.unregister_class(TEXTTOFACE_PT_voice_library)
+    bpy.utils.unregister_class(TEXTTOFACE_OT_export_shape_keys)
+    bpy.utils.unregister_class(TEXTTOFACE_OT_open_file)
     bpy.utils.unregister_class(TEXTTOFACE_OT_preview_audio)
     bpy.utils.unregister_class(TEXTTOFACE_OT_generate_audio)
-    bpy.utils.unregister_class(TEXTTOFACE_OT_load_last_audio)
-    bpy.utils.unregister_class(TEXTTOFACE_OT_load_specific_audio)
-    bpy.utils.unregister_class(TEXTTOFACE_OT_export_shape_keys)
     del bpy.types.Scene.texttoface_props
     bpy.utils.unregister_class(TEXTTOFACE_Props) 
